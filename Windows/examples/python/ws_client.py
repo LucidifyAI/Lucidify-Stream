@@ -72,7 +72,7 @@ async def main(args):
                     print("server error:", m["message"])
             if time.time() - last_print >= 1:
                 alpha = None if last_bp is None or last_bp[7] is None else round(last_bp[7] * 100)
-                print(f"raw samples so far: {raw_samples:6d}   Fp1 relative alpha: {alpha}%")
+                print(f"raw samples so far: {raw_samples:6d}   AFz relative alpha: {alpha}%")
                 last_print = time.time()
         print("done:", "ok" if raw_samples > 0 or last_bp is not None else "no data received")
 

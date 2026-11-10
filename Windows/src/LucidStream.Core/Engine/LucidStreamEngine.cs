@@ -26,7 +26,6 @@ public sealed class LucidStreamEngine : IAsyncDisposable, IStreamSink
     private LslPublisher? _lsl;
     private WsHub? _hub;
     private SessionWriter? _recorder;
-    private DevPageServer? _devPage;
     private Timer? _statusTimer;
     private OriginPolicy? _policy;
 
@@ -42,8 +41,6 @@ public sealed class LucidStreamEngine : IAsyncDisposable, IStreamSink
     public int? ActivePort => _hub?.Port;
     public bool LslActive => _lsl != null;
     public string? RecordingFolder => _recorder?.Folder;
-    public string? DevPageUrl => _devPage?.Url;
-    public bool Listening => Tokens.HasActiveLaunchToken;
 
     public event Action<EngineState>? StateChanged;
     public event Action<DeviceStatus>? DeviceStatusChanged;
@@ -51,6 +48,15 @@ public sealed class LucidStreamEngine : IAsyncDisposable, IStreamSink
     /// <summary>Every frame, for the live view. Raised on the acquisition thread; marshal to the UI yourself.</summary>
     public event Action<StreamFrame>? FrameProduced;
     public event Action<GapNotice>? GapProduced;
+
+    /// <summary>Raw 36-byte patch packets as received (real patch only), for Lucidify Cloud upload. Acquisition thread.</summary>
+    public event Action<CgxRawBlock>? RawPacketsReceived;
+
+    /// <summary>An operator marker was added (label).</summary>
+    public event Action<string>? MarkerAdded;
+
+    /// <summary>True when the connected source delivers raw patch packets (needed for Cloud recording).</summary>
+    public bool HasRawPackets => _source is IRawPacketSource;
 
     public LucidStreamEngine(AppSettings settings, string appDirectory, string appName)
     {
@@ -74,6 +80,7 @@ public sealed class LucidStreamEngine : IAsyncDisposable, IStreamSink
             source.EegReceived += OnSourceEeg;
             source.AccelReceived += OnSourceAccel;
             source.MarkerReceived += OnSourceMarker;
+            if (source is IRawPacketSource raw) raw.RawReceived += OnSourceRaw;
             try
             {
                 await source.StartAsync(ct);
@@ -117,7 +124,10 @@ public sealed class LucidStreamEngine : IAsyncDisposable, IStreamSink
         s.EegReceived -= OnSourceEeg;
         s.AccelReceived -= OnSourceAccel;
         s.MarkerReceived -= OnSourceMarker;
+        if (s is IRawPacketSource raw) raw.RawReceived -= OnSourceRaw;
     }
+
+    private void OnSourceRaw(CgxRawBlock b) => RawPacketsReceived?.Invoke(b);
 
     private void OnSourceEeg(EegBlock b) => _core?.OnEeg(b);
     private void OnSourceAccel(AccelBlock b) => _core?.OnAccel(b);
@@ -164,19 +174,9 @@ public sealed class LucidStreamEngine : IAsyncDisposable, IStreamSink
             }
 
             var allowlist = AllowlistLoader.Load(AppDirectory);
-            _policy = new OriginPolicy(allowlist, Settings.DeveloperMode);
+            _policy = new OriginPolicy(allowlist, Settings.DeveloperMode, Settings.AllowedOrigins);
             _hub = await StartHubAsync(core);
             core.AddSink(_hub);
-
-            if (Settings.DeveloperMode)
-            {
-                try
-                {
-                    _devPage = new DevPageServer(Settings.DevPagePort, Path.Combine(AppDirectory, "web", "listen-dev"));
-                    await _devPage.StartAsync();
-                }
-                catch (Exception ex) { Log.Warn($"Developer Listen page could not start: {ex.Message}"); _devPage = null; }
-            }
 
             _core = core;
             _statusTimer = new Timer(_ => PublishStatus(), null, TimeSpan.Zero, TimeSpan.FromSeconds(StreamCore.StatusIntervalSeconds));
@@ -207,7 +207,7 @@ public sealed class LucidStreamEngine : IAsyncDisposable, IStreamSink
             {
                 await hub.StartAsync();
                 hub.ClientsChanged += () => ClientsChanged?.Invoke();
-                if (port != Settings.WebSocketPort) Log.Warn($"Port {Settings.WebSocketPort} was busy; using {port}. The Listen link carries the new port.");
+                if (port != Settings.WebSocketPort) Log.Warn($"Port {Settings.WebSocketPort} was busy; using {port}. Clients must connect to ws://localhost:{port}{ProtocolInfo.Path}.");
                 return hub;
             }
             catch (Exception ex)
@@ -236,7 +236,6 @@ public sealed class LucidStreamEngine : IAsyncDisposable, IStreamSink
         core?.Flush();
         Tokens.RevokeAll();
         if (_hub != null) { await _hub.DisposeAsync(); _hub = null; }
-        if (_devPage != null) { await _devPage.DisposeAsync(); _devPage = null; }
         _lsl?.Dispose(); _lsl = null;
         _recorder?.Dispose(); _recorder = null;
         SetState(_source != null ? EngineState.Connected : EngineState.Disconnected);
@@ -244,23 +243,10 @@ public sealed class LucidStreamEngine : IAsyncDisposable, IStreamSink
         Log.Info("Streaming stopped.");
     }
 
-    // ------------------------------------------------------------------ Listen, pairing, markers
+    // ------------------------------------------------------------------ pairing, markers
 
-    /// <summary>Mint a launch token and build the Listen URL. The token travels only in the URL fragment.</summary>
-    public string CreateListenUrl()
-    {
-        if (State != EngineState.Streaming || _hub == null) throw new InvalidOperationException("Start streaming before Listen.");
-        var token = Tokens.CreateLaunchToken();
-        var baseUrl = Settings.DeveloperMode && _devPage != null ? _devPage.Url : Settings.ListenUrl;
-        ClientsChanged?.Invoke();
-        return $"{baseUrl.Split('#')[0]}#token={Uri.EscapeDataString(token.Token)}&port={_hub.Port}";
-    }
-
-    public void StopListening()
-    {
-        Tokens.RevokeLaunchTokens();
-        ClientsChanged?.Invoke();
-    }
+    /// <summary>Apply Settings.AllowedOrigins to the running server right away.</summary>
+    public void ApplyAllowedOrigins() => _policy?.SetUserOrigins(Settings.AllowedOrigins);
 
     public PairingCode CreatePairingCode(IEnumerable<string> scopes) => Tokens.CreatePairingCode(scopes);
 
@@ -274,6 +260,7 @@ public sealed class LucidStreamEngine : IAsyncDisposable, IStreamSink
         if (core == null) { Log.Warn("Markers are recorded only while streaming."); return null; }
         var t = core.AddMarker(label.Trim());
         Log.Info($"Marker: {label.Trim()}");
+        MarkerAdded?.Invoke(label.Trim());
         return t;
     }
 
@@ -303,8 +290,12 @@ public sealed class LucidStreamEngine : IAsyncDisposable, IStreamSink
             ["serial"] = info?.Serial,
             ["firmware"] = info?.Firmware,
             ["battery_pct"] = s.BatteryPercent,
+            ["battery_v"] = s.BatteryVolts,
+            ["sd_card"] = s.SdCardPresent,
             ["contact"] = s.Contact,
             ["impedance_kohm"] = s.ImpedanceKohm,
+            ["dc_offset_mv"] = s.DcOffsetMv,
+            ["packets_lost"] = s.PacketsLost,
             ["ble_rssi_dbm"] = s.SignalStrengthDbm,
             ["received_samples"] = core?.ReceivedSamples,
             ["dropped_samples"] = core?.DroppedSamples,

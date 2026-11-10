@@ -149,7 +149,7 @@
   }
 
   function onBandPower(row) {
-    // Row layout per channel: 5 absolute bands, then 5 relative bands (Fp1 then Fp2).
+    // Row layout per channel: 5 absolute bands, then 5 relative bands (AFz then Fp2).
     BANDS.forEach((b, i) => {
       const a = row[5 + i], c = row[15 + i];
       const vals = [a, c].filter((x) => x !== null && Number.isFinite(x));

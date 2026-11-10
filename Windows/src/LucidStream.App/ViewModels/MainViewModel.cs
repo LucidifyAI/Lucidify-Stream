@@ -67,6 +67,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _ui = SynchronizationContext.Current ?? new SynchronizationContext();
         _patchFactory = patchFactory;
         _engine = new LucidStreamEngine(settings, appDirectory, appName);
+        Cloud = new CloudViewModel(_engine, _ui);
 
         LslStreams = new ObservableCollection<StreamToggle>(new[]
         {
@@ -85,14 +86,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         DisconnectCommand = new RelayCommand(_ => _engine.DisconnectAsync(), _ => _engine.State is EngineState.Connected or EngineState.Streaming, ShowError);
         StartStreamingCommand = new RelayCommand(_ => StartStreamingAsync(), _ => _engine.State == EngineState.Connected, ShowError);
         StopStreamingCommand = new RelayCommand(_ => _engine.StopStreamingAsync(), _ => _engine.State == EngineState.Streaming, ShowError);
-        ListenCommand = RelayCommand.Sync(_ => Listen(), _ => _engine.State == EngineState.Streaming, ShowError);
-        StopListeningCommand = RelayCommand.Sync(_ => { _engine.StopListening(); RefreshListen(); }, _ => _engine.Listening, ShowError);
         PairCommand = RelayCommand.Sync(_ => CreatePairingCode(), _ => _engine.State == EngineState.Streaming, ShowError);
         SendMarkerCommand = RelayCommand.Sync(_ => { if (_engine.AddMarker(MarkerText) != null) MarkerText = ""; }, _ => IsStreaming && !string.IsNullOrWhiteSpace(MarkerText), ShowError);
         PresetMarkerCommand = RelayCommand.Sync(p => _engine.AddMarker(p as string ?? ""), _ => IsStreaming, ShowError);
         OpenRecordingsCommand = RelayCommand.Sync(_ => OpenFolder(_engine.RecordingFolder ?? Settings.RecordFolder), null, ShowError);
         ExportLogCommand = RelayCommand.Sync(_ => ExportLog(), null, ShowError);
-        AllCommands = new[] { ConnectCommand, DisconnectCommand, StartStreamingCommand, StopStreamingCommand, ListenCommand, StopListeningCommand, PairCommand, SendMarkerCommand, PresetMarkerCommand };
+        AllCommands = new[] { ConnectCommand, DisconnectCommand, StartStreamingCommand, StopStreamingCommand, PairCommand, SendMarkerCommand, PresetMarkerCommand };
 
         _engine.StateChanged += _ => Post(OnStateChanged);
         _engine.DeviceStatusChanged += s => Post(() => ApplyStatus(s));
@@ -167,7 +166,22 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         get => Settings.DeveloperMode;
         set { Settings.DeveloperMode = value; Save(); OnPropertyChanged(); RefreshSourceOptions(); }
     }
-    public string ListenUrl { get => Settings.ListenUrl; set { Settings.ListenUrl = value; Save(); OnPropertyChanged(); } }
+    /// <summary>Browser origins allowed to connect, one per line.</summary>
+    public string AllowedOrigins
+    {
+        get => string.Join(Environment.NewLine, Settings.AllowedOrigins);
+        set
+        {
+            // Store what browsers actually send (scheme, host, port), so a pasted page address works.
+            Settings.AllowedOrigins = (value ?? "").Split(new[] { '\r', '\n', ' ', ',' }, StringSplitOptions.RemoveEmptyEntries)
+                .SelectMany(OriginPolicy.UserEntryToOrigins).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            Save();
+            _engine.ApplyAllowedOrigins();
+            Log.Info(Settings.AllowedOrigins.Count == 0 ? "No web pages are allowed to connect."
+                : "Web pages allowed to connect: " + string.Join(", ", Settings.AllowedOrigins));
+            OnPropertyChanged();
+        }
+    }
     public string BleLatencyMs
     {
         get => Settings.BleLatencyMs.ToString(CultureInfo.InvariantCulture);
@@ -175,9 +189,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     }
     public string StudyCode { get => Settings.StudyCode; set { Settings.StudyCode = value ?? ""; Save(); OnPropertyChanged(); } }
 
-    // Listen and clients
-    private string _listenStatus = "Start streaming, then tap Listen to hear your EEG in the browser.";
-    public string ListenStatus { get => _listenStatus; private set => Set(ref _listenStatus, value); }
+    // Clients
     public ObservableCollection<ClientRow> Clients { get; } = new();
     private bool _pairRaw, _pairProcessed = true, _pairMarkers;
     public bool PairRaw { get => _pairRaw; set => Set(ref _pairRaw, value); }
@@ -211,8 +223,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public RelayCommand DisconnectCommand { get; }
     public RelayCommand StartStreamingCommand { get; }
     public RelayCommand StopStreamingCommand { get; }
-    public RelayCommand ListenCommand { get; }
-    public RelayCommand StopListeningCommand { get; }
     public RelayCommand PairCommand { get; }
     public RelayCommand SendMarkerCommand { get; }
     public RelayCommand PresetMarkerCommand { get; }
@@ -248,13 +258,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         if (!IsReplayActive && s.Contact.Any(c => !c))
             Log.Warn("An electrode reports poor skin contact. Streaming anyway; check the patch.");
         await _engine.StartStreamingAsync();
-    }
-
-    private void Listen()
-    {
-        var url = _engine.CreateListenUrl();
-        OpenUrlRequested?.Invoke(url);
-        RefreshListen();
     }
 
     private void CreatePairingCode()
@@ -309,8 +312,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>Called by the window about 15 times a second on the UI thread.</summary>
+    /// <summary>Lucidify Cloud: sign-in, patient, recording and delay.</summary>
+    public CloudViewModel Cloud { get; }
+
     public void Tick()
     {
+        Cloud.Tick();
         if (!IsStreaming) return;
         float[] a = new float[TraceSamples], b = new float[TraceSamples];
         lock (_traceGate)
@@ -375,14 +382,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(IsNotStreaming));
         OnPropertyChanged(nameof(IsDisconnected));
         OnPropertyChanged(nameof(IsReplayActive));
-        RefreshListen();
         RefreshClients();
         RaiseAll();
     }
 
     private void ApplyStatus(DeviceStatus s)
     {
-        Battery = s.BatteryPercent is int b ? $"{b}%" : "-";
+        Battery = s.BatteryPercent is int b ? (s.BatteryVolts is double v ? $"{b}% ({v:0.00} V)" : $"{b}%") : "-";
         Fp1Contact = Contact(s, 0);
         Fp2Contact = Contact(s, 1);
     }
@@ -396,32 +402,19 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         return imp is double k ? $"{text}, {k:0.0} kOhm" : text;
     }
 
-    private void RefreshListen()
-    {
-        if (!IsStreaming) ListenStatus = "Start streaming, then tap Listen to hear your EEG in the browser.";
-        else if (_engine.Listening)
-        {
-            var page = _engine.Clients().FirstOrDefault(c => c.Kind == "Listen");
-            ListenStatus = page != null ? $"Listening in the browser ({page.Origin})." : "Waiting for the Listen page to connect. Allow the browser prompt if it appears.";
-        }
-        else ListenStatus = "Ready. Tap Listen to open the Listen page in your browser.";
-        StopListeningCommand.Raise();
-    }
-
     private void RefreshClients()
     {
         var rows = _engine.Clients().Select(c => new ClientRow(c.Name, c.Origin, c.Kind, c.Scopes, c.Connected.ToLocalTime().ToString("HH:mm:ss"), c.FramesSent, c.FramesDropped)).ToList();
         if (rows.SequenceEqual(Clients)) return;
         Clients.Clear();
         foreach (var r in rows) Clients.Add(r);
-        RefreshListen();
     }
 
     private void RefreshSourceOptions()
     {
         var previous = SelectedSource?.Kind;
         SourceOptions.Clear();
-        SourceOptions.Add(new SourceOption("LucidPro patch (Bluetooth)", SourceKind.Patch));
+        SourceOptions.Add(new SourceOption("LucidPro patch (USB dongle or Bluetooth)", SourceKind.Patch));
         if (Settings.DeveloperMode)
         {
             SourceOptions.Add(new SourceOption("Simulated patch (developer)", SourceKind.Simulated));
@@ -457,6 +450,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         Settings.Save();
+        await Cloud.DisposeAsync();
         await _engine.DisposeAsync();
     }
 }

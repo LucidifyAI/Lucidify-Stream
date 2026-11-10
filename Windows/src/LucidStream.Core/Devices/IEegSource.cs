@@ -33,9 +33,15 @@ public interface IEegSource : IAsyncDisposable
 
 public sealed record ReplayDescriptor(string SourceId, DateTimeOffset RecordedUtc, bool Loop);
 
+/// <summary>A source that can also hand over the patch's raw packets unchanged (for Lucidify Cloud upload).</summary>
+public interface IRawPacketSource
+{
+    event Action<CgxRawBlock>? RawReceived;
+}
+
 /// <summary>
-/// Turns raw notification bytes from the patch into EEG/accelerometer blocks.
-/// The CGX packet format is not yet specified for Lucid-Stream; see CgxPacketParser.
+/// A parser that handles one notification at a time. Not used by the patch sources: CGX packets can split across
+/// notifications, so they use the stateful <see cref="CgxStreamParser"/> instead.
 /// </summary>
 public interface IPatchPacketParser
 {

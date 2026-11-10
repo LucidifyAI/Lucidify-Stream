@@ -10,12 +10,18 @@ public sealed record DeviceInfo(
     string[] EegLabels,
     string Reference)
 {
+    /// <summary>
+    /// The patch digitizes two EEG channels, which CGX names AFz and Fp2, both against the patch's reference electrode.
+    /// CGX's documents do not name the reference site, so it is reported as unspecified rather than guessed.
+    /// </summary>
     public static DeviceInfo LucidPro(string serial, string firmware, double accelRate) =>
-        new("LucidPro", serial, firmware, 500, accelRate, new[] { "Fp1", "Fp2" }, "AFz");
+        new("LucidPro", serial, firmware, 500, accelRate, new[] { "AFz", "Fp2" }, PatchReference);
+
+    public const string PatchReference = "patch reference electrode (site not specified by CGX)";
 }
 
 /// <summary>
-/// A block of EEG samples as delivered by the device, interleaved by channel (Fp1, Fp2, Fp1, Fp2, ...), in microvolts.
+/// A block of EEG samples as delivered by the device, interleaved by channel (AFz, Fp2, AFz, Fp2, ...), in microvolts.
 /// </summary>
 /// <param name="Samples">Interleaved samples, length = sampleCount * channels.</param>
 /// <param name="Channels">Channel count (2 for the patch).</param>
@@ -40,6 +46,14 @@ public sealed record DeviceStatus
     public double?[] ImpedanceKohm { get; init; } = { null, null };
     public bool[] Contact { get; init; } = { false, false };
     public int? SignalStrengthDbm { get; init; }
+    public double? BatteryVolts { get; init; }
+    public bool? SdCardPresent { get; init; }
+
+    /// <summary>Per-channel DC offset in millivolts over the last second (the patch is DC-coupled).</summary>
+    public double?[] DcOffsetMv { get; init; } = { null, null };
+
+    /// <summary>Packets lost on the link since connecting, from the patch's packet counter.</summary>
+    public long PacketsLost { get; init; }
     public string? Message { get; init; }
 }
 

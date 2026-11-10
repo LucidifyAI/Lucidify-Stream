@@ -12,13 +12,14 @@ if (args.Contains("--help") || args.Contains("-h"))
         lucid-stream [source] [options]
 
         Sources (pick one):
+          --dongle                 LucidPro through the CGX USB dongle (Windows, FTDI driver)
           --simulate               simulated patch (developer)
           --replay <folder>        replay a recorded session folder (developer)
           --loop                   with --replay: start again at the end
 
         Options:
-          --dev                    developer mode: dev origins + bundled Listen page on http://localhost:8766
-          --listen                 print a Listen URL (token in the fragment) once streaming starts
+          --dev                    developer mode (also accepts dev origins from the signed allowlist)
+          --origin <origin>        also accept this browser origin, e.g. http://localhost:5173
           --pair <scopes>          print a 6-digit pairing code, e.g. --pair read:raw,read:processed,write:markers
           --no-lsl                 WebSocket only
           --lan [address]          also accept paired clients on the network (trusted networks only)
@@ -28,7 +29,7 @@ if (args.Contains("--help") || args.Contains("-h"))
           --seconds <n>            stop after n seconds (default: run until Ctrl+C)
           --verbose                print the log
 
-        The real LucidPro Bluetooth connection is in the Windows app (LucidStream.App).
+        Bluetooth (without the dongle) is in the Windows app (LucidStream.App).
         """);
     return 0;
 }
@@ -47,14 +48,16 @@ var settings = new AppSettings
     LanAddress = Arg("--lan") ?? "",
     WebSocketPort = int.TryParse(Arg("--port"), out var p) ? p : ProtocolInfo.DefaultPort,
     LineFrequencyHz = double.TryParse(Arg("--notch"), out var n) ? n : 60,
+    AllowedOrigins = Arg("--origin") is { } origin ? new List<string> { origin } : new List<string>(),
 };
 
 IEegSource source;
 if (Arg("--replay") is { } folder) source = new ReplaySource(folder, args.Contains("--loop"));
 else if (args.Contains("--simulate")) source = new SimulatedSource();
+else if (args.Contains("--dongle")) source = new PatchDongleSource(settings.Ble);
 else
 {
-    Console.Error.WriteLine("Choose a source: --simulate or --replay <folder>. (The Bluetooth patch is in the Windows app.)");
+    Console.Error.WriteLine("Choose a source: --dongle, --simulate or --replay <folder>. (Bluetooth is in the Windows app.)");
     return 2;
 }
 
@@ -65,8 +68,6 @@ await using var engine = new LucidStreamEngine(settings, AppContext.BaseDirector
 await engine.ConnectAsync(source);
 await engine.StartStreamingAsync();
 Console.WriteLine($"Streaming {source.DisplayName}: ws://localhost:{engine.ActivePort}{ProtocolInfo.Path}" + (engine.LslActive ? " + LSL" : ""));
-if (engine.DevPageUrl != null) Console.WriteLine($"Developer Listen page: {engine.DevPageUrl}");
-if (args.Contains("--listen")) Console.WriteLine($"Listen URL: {engine.CreateListenUrl()}");
 if (Arg("--pair") is { } scopes)
 {
     var code = engine.CreatePairingCode(scopes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));

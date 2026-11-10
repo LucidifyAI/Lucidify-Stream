@@ -29,7 +29,7 @@ public sealed class SessionHeader
 
 /// <summary>
 /// The optional local session file (spec: "Local session file"). A folder with session.json plus CSV files:
-/// eeg_raw.csv (index, t, Fp1, Fp2), acc.csv (index, t, x, y, z), markers.csv (index, t, text), gaps.csv.
+/// eeg_raw.csv (index, t, AFz, Fp2), acc.csv (index, t, x, y, z), markers.csv (index, t, text), gaps.csv.
 /// Values are written with round-trip precision so a replay reproduces eeg.raw exactly.
 ///
 /// TODO(format): switch to the Lucidify session format used by the Android/Windows apps once it is shared,

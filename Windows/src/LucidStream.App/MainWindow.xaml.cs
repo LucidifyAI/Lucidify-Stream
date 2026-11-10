@@ -15,7 +15,7 @@ namespace LucidStream.App;
 
 public partial class MainWindow : Window
 {
-    private const double LaneMicrovolts = 60;
+    internal const double LaneMicrovolts = 60;
     private readonly MainViewModel _vm;
     private readonly DispatcherTimer _timer;
     private readonly System.Windows.Forms.NotifyIcon _tray;
@@ -27,9 +27,10 @@ public partial class MainWindow : Window
         InitializeComponent();
         var settings = AppSettings.Load();
         _vm = new MainViewModel(settings, AppContext.BaseDirectory, $"Lucid-Stream {typeof(MainWindow).Assembly.GetName().Version} (Windows)",
-            s => new PatchBleSource(s.Ble));
+            s => new PatchSource(s.Ble));
         _vm.TraceUpdated += DrawTrace;
         _vm.OpenUrlRequested += OpenUrl;
+        _vm.Cloud.OpenRequested += OpenCloud;
         DataContext = _vm;
 
         _timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(66) };
@@ -38,6 +39,10 @@ public partial class MainWindow : Window
 
         _tray = CreateTrayIcon();
         Closing += OnClosing;
+
+        var icon = Branding.CreateWindowIcon();
+        if (icon != null) Icon = icon;
+        SourceInitialized += (_, _) => Branding.ApplyDarkTitleBar(this);
     }
 
     // ------------------------------------------------------------------ tray: keep streaming with the window closed
@@ -49,7 +54,7 @@ public partial class MainWindow : Window
         menu.Items.Add("Stop streaming and exit", null, async (_, _) => await ExitAsync());
         var icon = new System.Windows.Forms.NotifyIcon
         {
-            Icon = System.Drawing.SystemIcons.Application,
+            Icon = Branding.CreateTrayIcon(),
             Text = "Lucid-Stream",
             ContextMenuStrip = menu,
             Visible = true
@@ -65,14 +70,15 @@ public partial class MainWindow : Window
         Activate();
     }
 
-    private async void OnClosing(object? sender, CancelEventArgs e)
+    private void OnClosing(object? sender, CancelEventArgs e)
     {
         if (_exiting) return;
+        // WPF forbids Show, Hide or Close while the window is closing, so cancel and act once this handler returns.
+        e.Cancel = true;
         if (_vm.IsStreaming)
         {
             // Keep streaming in the background; the tray icon brings the window back.
-            e.Cancel = true;
-            Hide();
+            Dispatcher.BeginInvoke(new Action(Hide));
             if (!_trayHintShown)
             {
                 _tray.ShowBalloonTip(4000, "Lucid-Stream is still streaming", "Use the tray icon to open it or to stop streaming and exit.", System.Windows.Forms.ToolTipIcon.Info);
@@ -80,8 +86,7 @@ public partial class MainWindow : Window
             }
             return;
         }
-        e.Cancel = true;
-        await ExitAsync();
+        Dispatcher.BeginInvoke(new Func<Task>(ExitAsync));
     }
 
     private async Task ExitAsync()
@@ -93,8 +98,21 @@ public partial class MainWindow : Window
         catch (Exception ex) { Log.Error($"Shutdown: {ex.Message}"); }
         _tray.Visible = false;
         _tray.Dispose();
-        Close();
+        _cloudWindow?.CloseForExit();
+        // Shutdown closes the window; OnClosing lets it through because _exiting is set.
         Application.Current.Shutdown();
+    }
+
+    // ------------------------------------------------------------------ Lucidify Cloud window
+
+    private Cloud.CloudWindow? _cloudWindow;
+
+    private void OpenCloud()
+    {
+        _cloudWindow ??= new Cloud.CloudWindow(_vm.Cloud, _vm);
+        _cloudWindow.Show();
+        if (_cloudWindow.WindowState == WindowState.Minimized) _cloudWindow.WindowState = WindowState.Normal;
+        _cloudWindow.Activate();
     }
 
     // ------------------------------------------------------------------ UI handlers
@@ -140,7 +158,7 @@ public partial class MainWindow : Window
         Fp2Line.Points = Lane(fp2, w, h * 0.72, h * 0.22);
     }
 
-    private static PointCollection Lane(float[] data, double width, double mid, double halfHeight)
+    internal static PointCollection Lane(float[] data, double width, double mid, double halfHeight)
     {
         const int step = 2; // 1000 points for 4 s is plenty
         var pts = new PointCollection(data.Length / step + 1);

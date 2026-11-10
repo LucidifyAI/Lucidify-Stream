@@ -17,6 +17,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Hosts the Lucidify Cloud viewer page (Microsoft Edge WebView2; the runtime ships with Windows 10 and 11). -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3240.44" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\LucidStream.Core\LucidStream.Core.csproj" />
   </ItemGroup>
 

@@ -32,7 +32,7 @@ public sealed record ClientSnapshot(string Name, string Origin, string Kind, str
 
 /// <summary>
 /// The WebSocket API server (spec, "WebSocket API specification"): localhost first, optional LAN,
-/// Origin allowlist and Host checks before any message is read, launch and paired tokens, JSON or binary
+/// Origin allowlist and Host checks before any message is read, pairing-code tokens, JSON or binary
 /// data frames, resume after reconnect, and per-client backpressure that never slows acquisition.
 /// </summary>
 public sealed class WsHub : IStreamSink, IAsyncDisposable
@@ -115,7 +115,7 @@ public sealed class WsHub : IStreamSink, IAsyncDisposable
         }
         if (hasOrigin && !originAllowed)
         {
-            Log.Warn($"Rejected connection: origin '{origin}' is not on the allowlist.");
+            Log.Warn($"Rejected connection: origin '{origin}' is not allowed. To allow it, add {origin} under Developer > Web pages allowed to connect.");
             await CloseAsync(ws, CloseCodes.OriginNotAllowed, "origin not allowed");
             return;
         }
@@ -156,12 +156,10 @@ public sealed class WsHub : IStreamSink, IAsyncDisposable
         }
         else
         {
-            var check = _tokens.Check(Str(hello, "token"), originAllowed, loopback, out token);
-            switch (check)
+            if (_tokens.Check(Str(hello, "token"), out token) != TokenCheck.Ok)
             {
-                case TokenCheck.Expired: await CloseAsync(ws, CloseCodes.TokenExpired, "token expired"); return;
-                case TokenCheck.Invalid:
-                case TokenCheck.WrongContext: await CloseAsync(ws, CloseCodes.InvalidToken, "invalid token"); return;
+                await CloseAsync(ws, CloseCodes.InvalidToken, "invalid token");
+                return;
             }
         }
 
@@ -631,7 +629,7 @@ internal sealed class ClientSession
         _readCts.CancelAfter(TimeSpan.FromSeconds(5));
     }
 
-    public ClientSnapshot Snapshot() => new(Name, Origin, Token.Kind == TokenKind.Launch ? "Listen" : "Paired",
+    public ClientSnapshot Snapshot() => new(Name, Origin, Origin == "(none)" ? "App" : "Browser",
         string.Join(" ", Token.Scopes.OrderBy(s => s)), Connected, Interlocked.Read(ref _framesSent), Interlocked.Read(ref _framesDropped), Loopback);
 }
 

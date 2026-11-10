@@ -28,6 +28,5 @@ public static class ProtocolInfo
     public const int SchemaMajor = 1;
     public const string Path = "/v1/stream";
     public const int DefaultPort = 8765;
-    public const int DefaultDevPagePort = 8766;
     public const string MdnsService = "_lucidify._tcp";
 }

@@ -1,10 +1,5 @@
 {
-  "version": 1,
-  "origins": [
-    "https://listen.example.com"
-  ],
-  "dev_origins": [
-    "http://localhost:8766",
-    "http://127.0.0.1:8766"
-  ]
+  "version": 2,
+  "origins": [],
+  "dev_origins": []
 }

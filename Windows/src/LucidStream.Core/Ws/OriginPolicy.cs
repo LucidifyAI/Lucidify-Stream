@@ -22,16 +22,50 @@ public sealed class OriginPolicy
 {
     private readonly HashSet<string> _origins;
     private readonly HashSet<string> _devOrigins;
+    private volatile HashSet<string> _userOrigins = new();
 
     public int AllowlistVersion { get; }
     public bool DeveloperMode { get; }
 
-    public OriginPolicy(AllowlistDocument doc, bool developerMode)
+    /// <param name="userOrigins">Origins the user allowed in settings: https, or http on localhost for local development.</param>
+    public OriginPolicy(AllowlistDocument doc, bool developerMode, IEnumerable<string>? userOrigins = null)
     {
         AllowlistVersion = doc.Version;
         DeveloperMode = developerMode;
         _origins = new HashSet<string>(doc.Origins.Select(Normalize).Where(o => o != null && o.StartsWith("https://")).Select(o => o!));
+        SetUserOrigins(userOrigins ?? Array.Empty<string>());
         _devOrigins = new HashSet<string>(doc.DevOrigins.Select(Normalize).Where(o => o != null).Select(o => o!));
+    }
+
+    /// <summary>Replace the user's list; takes effect for the next connection.</summary>
+    public void SetUserOrigins(IEnumerable<string> entries) =>
+        _userOrigins = new HashSet<string>(entries.SelectMany(UserEntryToOrigins));
+
+    /// <summary>
+    /// What a user typed, as origins: a full page address is cut to its origin (browsers send only scheme, host and
+    /// port), and an https site is accepted with and without "www." since people type either. https, or http on localhost.
+    /// </summary>
+    public static IEnumerable<string> UserEntryToOrigins(string entry)
+    {
+        var text = (entry ?? "").Trim();
+        if (text.Length == 0) yield break;
+        if (!text.Contains("://")) text = "https://" + text;
+        if (!Uri.TryCreate(text, UriKind.Absolute, out var u)) yield break;
+        var o = Normalize(u.GetLeftPart(UriPartial.Authority));
+        if (o == null || !(o.StartsWith("https://") || IsLoopbackOrigin(o))) yield break;
+        yield return o;
+        if (o.StartsWith("https://") && u.HostNameType == UriHostNameType.Dns && u.Host.Contains('.'))
+        {
+            var host = u.Host.ToLowerInvariant();
+            var other = host.StartsWith("www.") ? host[4..] : "www." + host;
+            if (other.Contains('.')) yield return u.IsDefaultPort ? $"https://{other}" : $"https://{other}:{u.Port}";
+        }
+    }
+
+    private static bool IsLoopbackOrigin(string normalized)
+    {
+        var rest = normalized.StartsWith("http://") ? normalized["http://".Length..] : "";
+        return rest == "localhost" || rest.StartsWith("localhost:") || rest == "127.0.0.1" || rest.StartsWith("127.0.0.1:") || rest.StartsWith("[::1]");
     }
 
     public IReadOnlyCollection<string> Origins => _origins;
@@ -40,7 +74,7 @@ public sealed class OriginPolicy
     {
         var n = Normalize(origin);
         if (n == null) return false;
-        return _origins.Contains(n) || (DeveloperMode && _devOrigins.Contains(n));
+        return _origins.Contains(n) || _userOrigins.Contains(n) || (DeveloperMode && _devOrigins.Contains(n));
     }
 
     /// <summary>Lower-case scheme://host[:port] with default ports removed. Returns null for anything unparseable or "null".</summary>
@@ -117,7 +151,7 @@ public static class AllowlistLoader
             return doc;
         }
         Log.Warn("No allowlist found; only developer origins (if enabled) can connect.");
-        return new AllowlistDocument { Version = 0, DevOrigins = { "http://localhost:8766", "http://127.0.0.1:8766" } };
+        return new AllowlistDocument { Version = 0 };
     }
 
     /// <summary>Verify a signed update and save it as the new allowlist. Returns false (and keeps the old list) if it fails.</summary>

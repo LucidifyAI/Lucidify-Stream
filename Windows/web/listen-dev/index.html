@@ -6,11 +6,12 @@
   <meta name="referrer" content="no-referrer">
   <title>Lucidify Listen (developer)</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="listen.css?v=6f48580872">
+  <link rel="stylesheet" href="listen.css?v=4e9d5fd6a0">
 </head>
 <body>
   <main>
     <header>
+      <p class="eyebrow">Lucidify Listen</p>
       <h1>Listen</h1>
       <p class="sub">Your live EEG, as sound. Reference page served by Lucid-Stream in developer mode.</p>
     </header>
@@ -20,7 +21,7 @@
       <p>Tap <strong>Listen</strong> in the Lucid-Stream app on this computer. The app opens this page with a one-time link.</p>
     </section>
 
-    <section id="intro" class="card hidden">
+    <section id="intro" class="card hi hidden">
       <h2>Before you start</h2>
       <p>This page connects to the Lucid-Stream app running on this computer. Your browser may ask to
          <strong>connect to devices on your local network</strong> or <strong>apps on this device</strong>. Choose <strong>Allow</strong>.</p>
@@ -43,8 +44,8 @@
       </div>
 
       <div class="card">
-        <canvas id="scope" width="900" height="220" aria-label="Live EEG trace, Fp1 and Fp2"></canvas>
-        <div class="legend"><span class="sw fp1"></span>Fp1 <span class="sw fp2"></span>Fp2 <span class="muted">filtered, last 5 s</span></div>
+        <canvas id="scope" width="900" height="220" aria-label="Live EEG trace, AFz and Fp2"></canvas>
+        <div class="legend"><span class="sw fp1"></span>AFz <span class="sw fp2"></span>Fp2 <span class="muted">filtered, last 5 s</span></div>
       </div>
 
       <div class="card">
@@ -62,6 +63,6 @@
 
     <footer class="muted small">Research use only. Not for diagnosis or clinical decision-making.</footer>
   </main>
-  <script src="listen.js?v=405c9c1141"></script>
+  <script src="listen.js?v=6b8de0a8e5"></script>
 </body>
 </html>

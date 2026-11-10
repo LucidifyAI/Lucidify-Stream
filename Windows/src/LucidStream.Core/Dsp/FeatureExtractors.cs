@@ -77,7 +77,8 @@ public sealed class BandPowerExtractor
 public sealed class QualityExtractor
 {
     public const double FlatlineStdUv = 0.5;
-    public const double SaturationUv = 3000;      // TODO(device): replace with the patch's actual input range.
+    /// <summary>Patch input range is +/-300 mV and the EEG is DC-coupled, so only values near the rail count as saturated.</summary>
+    public const double SaturationUv = 295_000;
     public const double LargeArtifactStdUv = 150;
     public const double GoodImpedanceKohm = 20;
     public const double BadImpedanceKohm = 100;

@@ -10,7 +10,7 @@ namespace LucidStream.Core.Engine;
 /// <summary>User settings, stored as JSON in %LOCALAPPDATA%\LucidStream\settings.json.</summary>
 public sealed class AppSettings
 {
-    /// <summary>WebSocket port. 8765 by default; if busy the next free port is used and passed in the launch URL.</summary>
+    /// <summary>WebSocket port. 8765 by default; if busy the next free port is used and logged.</summary>
     public int WebSocketPort { get; set; } = ProtocolInfo.DefaultPort;
 
     /// <summary>LAN mode (off by default): also accept paired clients on this IPv4 address.</summary>
@@ -33,13 +33,19 @@ public sealed class AppSettings
     public string RecordFolder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Lucid-Stream", "Sessions");
 
     /// <summary>
-    /// Approved hosted Listen page. TODO(product): set to the real approved HTTPS page; its origin must be in config/allowlist.json.
+    /// Web pages allowed to connect from a browser, as origins (https://app.example.org; http only for localhost).
+    /// Apps outside a browser (Python, MATLAB, native code) send no Origin and need only a pairing code.
     /// </summary>
-    public string ListenUrl { get; set; } = "https://listen.example.com/listen";
+    public List<string> AllowedOrigins { get; set; } = new();
 
-    /// <summary>Developer mode: dev sources (simulator, replay), dev origins, and the bundled Listen page on DevPagePort.</summary>
+    /// <summary>The Lucidify Cloud viewer shown in the Cloud window; it also provides sign-in and the patient picker.</summary>
+    public string CloudViewerUrl { get; set; } = "https://lucidify-cloud.web.app/cloud_session_viewer.html";
+
+    /// <summary>Firebase JS SDK version the Cloud viewer loads (the app asks the page's Firebase session for tokens).</summary>
+    public string CloudFirebaseJsVersion { get; set; } = "10.7.1";
+
+    /// <summary>Developer mode: the simulated patch and replay sources.</summary>
     public bool DeveloperMode { get; set; }
-    public int DevPagePort { get; set; } = ProtocolInfo.DefaultDevPagePort;
 
     /// <summary>Fixed BLE delivery latency subtracted from arrival times. TODO(validation): measure (spec, Timing).</summary>
     public double BleLatencyMs { get; set; } = 40;

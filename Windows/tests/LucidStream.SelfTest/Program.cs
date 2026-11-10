@@ -2,6 +2,10 @@ using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using LucidStream.Core.Cloud;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Logging;
 using LucidStream.Core.Common;
 using LucidStream.Core.Devices;
 using LucidStream.Core.Dsp;
@@ -34,6 +38,173 @@ t.Section("Binary frame codec");
     t.Check("samples round-trip", d.Data.SequenceEqual(f.Data!));
 }
 
+t.Section("CGX Patch packets");
+{
+    // Values chosen around the sign boundary and band edges, where a plain 24-bit read goes wrong.
+    var values = new[] { 0, 8, -8, 1016, 1024, -1024, 131064, 131072, -131072, 5_000_000, -5_000_000 };
+    var okRound = true;
+    var noFF = true;
+    var buf = new byte[3];
+    foreach (var v in values)
+    {
+        CgxPatchFormat.Encode24(v, buf);
+        if (buf[0] == 0xFF || buf[1] == 0xFF || buf[2] == 0xFF || ((buf[0] | buf[1] | buf[2]) & 1) != 0) noFF = false;
+        var pkt = new byte[36];
+        pkt[0] = 0xFF;
+        buf.CopyTo(pkt, 2);
+        if (CgxPatchFormat.Sample24(pkt, 0, CgxPacking.Cgx7Bit) != v) okRound = false;
+    }
+    t.Check("CGX 7-bit packing round-trips signed values", okRound);
+    t.Check("encoded bytes never 0xFF and always even", noFF);
+    var minus8 = new byte[36];
+    CgxPatchFormat.Encode24(-8, minus8.AsSpan(2));
+    t.Check($"-8 counts read plainly is {CgxPatchFormat.Sample24(minus8, 0, CgxPacking.Plain24)} (the Android/Cloud decode error)",
+        CgxPatchFormat.Sample24(minus8, 0, CgxPacking.Plain24) == -65794);
+
+    byte[] Packet(int counter, double afzUv, double fp2Uv, double impOhm = 10_000, double accZg = 1.0, double volts = 4.0, int sd = 1)
+    {
+        var p = new byte[36];
+        p[0] = 0xFF;
+        p[1] = (byte)(counter & 0x7F);
+        void Put(int ch, int v24) => CgxPatchFormat.Encode24(v24, p.AsSpan(2 + ch * 3));
+        Put(0, (int)Math.Round(afzUv / CgxPatchFormat.MicrovoltsPerCount));
+        Put(1, (int)Math.Round(fp2Uv / CgxPatchFormat.MicrovoltsPerCount));
+        var imp = (int)Math.Round((impOhm - CgxPatchFormat.ImpedanceOffsetOhms) / CgxPatchFormat.ImpedanceOhmsPerCount);
+        Put(2, imp);
+        Put(3, imp);
+        Put(9, (int)Math.Round(accZg / CgxPatchFormat.AccelGPerCount * 256));
+        p[32] = 0x12;
+        p[33] = (byte)Math.Round(volts * 25);
+        p[35] = (byte)sd;
+        return p;
+    }
+
+    var d = CgxPatchFormat.Decode(Packet(5, 25.0, -40.0), CgxPacking.Cgx7Bit);
+    t.Check($"EEG scale: AFz {d.AfzUv:0.00} uV, Fp2 {d.Fp2Uv:0.00} uV (within 0.4 uV)", Math.Abs(d.AfzUv - 25) < 0.4 && Math.Abs(d.Fp2Uv + 40) < 0.4);
+    t.Check($"impedance {d.ImpedanceAfzOhm:0} ohm near 10 kOhm", Math.Abs(d.ImpedanceAfzOhm - 10_000) < 250);
+    t.Check($"accelerometer Z {d.AccZ:0.000} g, battery {d.BatteryVolts:0.00} V, SD {d.SdCard}", Math.Abs(d.AccZ - 1) < 0.01 && Math.Abs(d.BatteryVolts - 4.0) < 0.01 && d.SdCard == 1);
+
+    var parser = new CgxStreamParser();
+    var eeg = new List<EegBlock>();
+    var acc = new List<AccelBlock>();
+    var stat = new List<DeviceStatus>();
+    var raw = new List<CgxRawBlock>();
+    parser.Eeg += eeg.Add;
+    parser.Accel += acc.Add;
+    parser.Status += stat.Add;
+    parser.Raw += raw.Add;
+
+    // 20 packets, split at awkward places, with junk in front.
+    var stream = new List<byte> { 0x12, 0x34 };
+    for (var i = 0; i < 20; i++) stream.AddRange(Packet(i, 10 + i, -10 - i));
+    var bytes = stream.ToArray();
+    parser.Feed(bytes.AsSpan(0, 50), 100.0);
+    parser.Feed(bytes.AsSpan(50, 301), 100.1);
+    parser.Feed(bytes.AsSpan(351), 100.2);
+    var samples = eeg.Sum(b => b.SampleCount);
+    t.Check($"framing across splits: {samples} samples, {parser.BytesDiscarded} junk bytes skipped", samples == 20 && parser.BytesDiscarded == 2);
+    t.Check("sample indexes continuous", IsContiguous(eeg));
+    t.Check("EEG channel order AFz, Fp2", Math.Abs(eeg[0].Samples[0] - 10) < 0.4 && Math.Abs(eeg[0].Samples[1] + 10) < 0.4);
+    t.Check("raw packets kept unchanged", raw.Sum(r => r.Count) == 20 && raw[0].Packets.AsSpan(0, 36).SequenceEqual(Packet(0, 10, -10)));
+    t.Check("accelerometer averaged to 50 Hz", acc.Sum(a => a.SampleCount) == 2 && Math.Abs(acc[0].Samples[2] - 1) < 0.01);
+
+    // Drop counters 20-24: five lost packets, then a broken packet that contains 0xFF.
+    var broken = Packet(25, 0, 0);
+    broken[10] = 0xFF;
+    eeg.Clear();
+    parser.Feed(broken.AsSpan(0, 20).ToArray().Concat(Packet(25, 1, 1)).Concat(Packet(26, 1, 1)).ToArray(), 100.3);
+    t.Check($"lost packets from the counter: {parser.PacketsLost}", parser.PacketsLost == 5);
+    t.Check("index jumps over the loss", eeg.Count == 1 && eeg[0].DeviceCounter == 25 && eeg[0].SampleCount == 2);
+
+    // A Bluetooth drop of 2 s: the 7-bit counter wraps, so the gap is sized from time.
+    parser.NoteLinkLost();
+    eeg.Clear();
+    parser.Feed(Packet((27 + 1000) % 128, 1, 1), 102.3);
+    t.Check($"long outage sized from time: index {eeg[0].DeviceCounter} (expected 1027)", eeg[0].DeviceCounter == 1027);
+
+    // Status after one second of packets.
+    var p2 = new CgxStreamParser();
+    var st = new List<DeviceStatus>();
+    p2.Status += st.Add;
+    var sec = new List<byte>();
+    for (var i = 0; i < 500; i++) sec.AddRange(Packet(i, 50_000, 350_000 * (i % 2 == 0 ? 1 : 0.9), impOhm: 15_000, volts: 3.88, sd: 0));
+    p2.Feed(sec.ToArray(), 10);
+    t.Check("status once per second", st.Count == 1);
+    var s0 = st[0];
+    t.Check($"status battery {s0.BatteryPercent}% ({s0.BatteryVolts} V), SD {s0.SdCardPresent}", s0.BatteryPercent == 58 && s0.SdCardPresent == false);
+    t.Check($"status impedance {s0.ImpedanceKohm[0]} kOhm", Math.Abs(s0.ImpedanceKohm[0]!.Value - 15) < 0.3);
+    t.Check($"contact from DC offset: AFz {s0.DcOffsetMv[0]} mV ok, Fp2 {s0.DcOffsetMv[1]} mV flagged", s0.Contact[0] && !s0.Contact[1]);
+}
+
+static bool IsContiguous(List<EegBlock> blocks)
+{
+    long next = 0;
+    foreach (var b in blocks)
+    {
+        if (b.DeviceCounter != next) return false;
+        next += b.SampleCount;
+    }
+    return true;
+}
+
+t.Section("Cloud recording (fake Cloud server)");
+{
+    var cloud = await FakeCloud.StartAsync();
+    var root = Path.Combine(Path.GetTempPath(), "lucidstream-cloud-" + Guid.NewGuid().ToString("N")[..8]);
+    var api = new CloudApi(cloud.BaseUrl, _ => Task.FromResult("test-token"));
+    var target = new CloudTarget("org1", "grp1", "subj1", "Test Org", "Patient 7");
+    var rec = CloudRecorder.Start(api, target, root, new PlainProtector());
+    string? bound = null;
+    rec.SessionBound += (sid, _) => bound = sid;
+
+    byte[] Pkt(int counter)
+    {
+        var p = new byte[36];
+        p[0] = 0xFF;
+        p[1] = (byte)(counter & 0x7F);
+        p[33] = 100;
+        p[35] = 1;
+        return p;
+    }
+    CgxRawBlock Block(long first, int n) => new(Enumerable.Range(0, n).SelectMany(i => Pkt((int)(first + i))).ToArray(), first, 0);
+
+    // Device indexes start at 1000; 6000 packets = 12 s, then a 100-packet loss, then 1000 more.
+    for (long i = 0; i < 6000; i += 100) rec.OnRaw(Block(1000 + i, 100));
+    for (long i = 6100; i < 7100; i += 100) rec.OnRaw(Block(1000 + i, 100));
+    rec.AddMarker("eyes closed");
+    rec.Stop();
+    var finished = await rec.WaitFinishedAsync(TimeSpan.FromSeconds(20));
+    var st = rec.Status;
+    t.Check($"session created and bound ({bound})", bound == "sess-1" && cloud.SessionInits == 1);
+    t.Check($"finalized ({st.State}, {st.Problem})", finished && st.State == CloudRecState.Done && cloud.Finalized);
+    var chunks = cloud.Chunks.Values.OrderBy(c => c.Seq).ToList();
+    t.Check($"chunks: {string.Join(" ", chunks.Select(c => $"{c.Seq}:{c.First}+{c.Count}"))}",
+        chunks.Count == 4 && chunks[0].First == 0 && chunks[0].Count == 2500 && chunks[1].First == 2500 && chunks[2].First == 5000 && chunks[2].Count == 1000
+        && chunks[3].First == 6100 && chunks[3].Count == 1000);
+    t.Check("payload is the raw packets, verified by SHA-256", chunks.All(c => c.Verified) && chunks[0].Payload.Length == 2500 * 36 && chunks[0].Payload[36] == 0xFF);
+    t.Check("times from sample index (tStartMs of chunk 3 = 12200)", chunks[3].TStartMs == 12200 && chunks[3].TEndMs == 14200);
+    t.Check("upload never sends the bearer token to the signed URL", !cloud.PutSawAuthorization);
+    t.Check("idempotency keys on init/complete", cloud.IdempotencyKeys.Any(k => k.EndsWith(":0:init")) && cloud.IdempotencyKeys.Any(k => k.EndsWith(":0:complete")));
+    t.Check("marker posted as a session event", cloud.Events.Contains("eyes closed"));
+    t.Check("spool removed after finalize", !Directory.EnumerateDirectories(root).Any());
+    await rec.DisposeAsync();
+
+    // A recording left behind by a closed app is finished on the next start.
+    cloud.Reset();
+    var rec2 = CloudRecorder.Start(new CloudApi(cloud.BaseUrl, _ => throw new CloudApiException(401, "signed out")), target, root, new PlainProtector());
+    for (long i = 0; i < 3000; i += 100) rec2.OnRaw(Block(i, 100));
+    await Task.Delay(300);
+    await rec2.DisposeAsync();
+    var left = CloudSpool.Unfinished(root).ToList();
+    t.Check("interrupted recording stays in the spool", left.Count == 1 && cloud.Chunks.Count == 0);
+    var rec3 = CloudRecorder.Resume(api, left[0], new PlainProtector());
+    var finished3 = await rec3.WaitFinishedAsync(TimeSpan.FromSeconds(20));
+    t.Check($"resumed and finalized ({rec3.Status.State}, {cloud.Chunks.Count} chunk)", finished3 && rec3.Status.State == CloudRecState.Done && cloud.Chunks.Count == 1 && cloud.FinalSeq == 1);
+    await rec3.DisposeAsync();
+    await cloud.DisposeAsync();
+    try { Directory.Delete(root, true); } catch { }
+}
+
 t.Section("Band power and filters");
 {
     var bp = new BandPowerExtractor(2, 500);
@@ -44,7 +215,7 @@ t.Section("Band power and filters");
         last = bp.Add(s) ?? last;
     }
     t.Check("features produced", last != null && last.Length == 20);
-    // Fp1 rel alpha is index 5 + 2; Fp2 rel theta is 10 + 5 + 1.
+    // Channel 1 rel alpha is index 5 + 2; channel 2 rel theta is 10 + 5 + 1.
     t.Check($"10 Hz sine -> alpha rel {last![7]:0.000} > 0.95", last[7] > 0.95);
     t.Check($"6 Hz sine -> theta rel {last[16]:0.000} > 0.95", last[16] > 0.95);
     var expectedAbs = 20.0 * 20.0 / 2.0; // sine power
@@ -66,16 +237,26 @@ t.Section("Band power and filters");
 
 t.Section("Origin and Host policy");
 {
-    var doc = new AllowlistDocument { Version = 3, Origins = { "https://Listen.Example.com/", "http://insecure.example.com" }, DevOrigins = { "http://localhost:8766" } };
+    var doc = new AllowlistDocument { Version = 3, Origins = { "https://App.Example.com/", "http://insecure.example.com" }, DevOrigins = { "http://localhost:8766" } };
     var prod = new OriginPolicy(doc, developerMode: false);
     var dev = new OriginPolicy(doc, developerMode: true);
-    t.Check("allowlisted https origin accepted (normalized)", prod.IsAllowed("https://listen.example.com"));
-    t.Check("same host, other port rejected", !prod.IsAllowed("https://listen.example.com:8443"));
-    t.Check("look-alike host rejected", !prod.IsAllowed("https://listen.example.com.evil.net"));
+    t.Check("allowlisted https origin accepted (normalized)", prod.IsAllowed("https://app.example.com"));
+    t.Check("same host, other port rejected", !prod.IsAllowed("https://app.example.com:8443"));
+    t.Check("look-alike host rejected", !prod.IsAllowed("https://app.example.com.evil.net"));
     t.Check("http origin in prod list ignored", !prod.IsAllowed("http://insecure.example.com"));
     t.Check("'null' origin rejected", !prod.IsAllowed("null"));
     t.Check("dev origin rejected outside developer mode", !prod.IsAllowed("http://localhost:8766"));
     t.Check("dev origin accepted in developer mode", dev.IsAllowed("http://localhost:8766"));
+    var user = new OriginPolicy(new AllowlistDocument(), false, new[] { "https://lab.example.org/", "http://localhost:5173", "http://lab.example.org" });
+    t.Check("user-allowed https origin accepted", user.IsAllowed("https://lab.example.org"));
+    t.Check("user-allowed http://localhost origin accepted", user.IsAllowed("http://localhost:5173"));
+    t.Check("user http origin off localhost ignored", !user.IsAllowed("http://lab.example.org"));
+    t.Check("nothing allowed by default", !new OriginPolicy(new AllowlistDocument(), false).IsAllowed("https://lab.example.org"));
+    var pasted = new OriginPolicy(new AllowlistDocument(), false, new[] { "https://www.stationantiques.ca/audiostudio" });
+    t.Check("pasted page address allows its site, with and without www", pasted.IsAllowed("https://stationantiques.ca") && pasted.IsAllowed("https://www.stationantiques.ca"));
+    t.Check("bare host name means https", OriginPolicy.UserEntryToOrigins("lab.example.org").Contains("https://lab.example.org"));
+    pasted.SetUserOrigins(Array.Empty<string>());
+    t.Check("list changes apply right away", !pasted.IsAllowed("https://stationantiques.ca"));
     t.Check("Host localhost:8765 ok", OriginPolicy.IsLoopbackHostAllowed("localhost:8765", 8765));
     t.Check("Host [::1]:8765 ok", OriginPolicy.IsLoopbackHostAllowed("[::1]:8765", 8765));
     t.Check("rebinding Host attacker.com:8765 rejected", !OriginPolicy.IsLoopbackHostAllowed("attacker.com:8765", 8765));
@@ -98,25 +279,19 @@ t.Section("Tokens");
 {
     var clock = new FakeTime();
     var store = new TokenStore(clock);
-    var launch = store.CreateLaunchToken();
-    t.Check("launch token scopes raw+processed", launch.Scopes.SetEquals(new[] { Scopes.ReadRaw, Scopes.ReadProcessed }));
-    t.Check("launch rejected without allowlisted browser origin", store.Check(launch.Token, false, true, out _) == TokenCheck.WrongContext);
-    t.Check("launch rejected off loopback (LAN)", store.Check(launch.Token, true, false, out _) == TokenCheck.WrongContext);
-    clock.Advance(TimeSpan.FromMinutes(3));
-    t.Check("unredeemed launch token expires after 2 min", store.Check(launch.Token, true, true, out _) == TokenCheck.Expired);
-
-    var l2 = store.CreateLaunchToken();
-    t.Check("fresh launch token accepted", store.Check(l2.Token, true, true, out _) == TokenCheck.Ok);
-    clock.Advance(TimeSpan.FromHours(2));
-    t.Check("redeemed launch token stays valid while listening", store.Check(l2.Token, true, true, out _) == TokenCheck.Ok);
-    store.RevokeLaunchTokens();
-    t.Check("Stop listening revokes it", store.Check(l2.Token, true, true, out _) == TokenCheck.Invalid);
-
     var code = store.CreatePairingCode(new[] { Scopes.ReadProcessed });
     t.Check("pairing code is 6 digits", code.Code.Length == 6 && code.Code.All(char.IsDigit));
     var paired = store.RedeemPairingCode(code.Code, "matlab");
     t.Check("pairing code redeems once", paired != null && store.RedeemPairingCode(code.Code, "again") == null);
-    t.Check("paired token works without browser origin", store.Check(paired!.Token, false, false, out _) == TokenCheck.Ok);
+    t.Check("paired token keeps the chosen scopes", paired!.Scopes.SetEquals(new[] { Scopes.ReadProcessed }));
+    t.Check("paired token valid for reconnecting", store.Check(paired.Token, out _) == TokenCheck.Ok);
+    clock.Advance(TimeSpan.FromHours(2));
+    t.Check("paired token still valid while streaming", store.Check(paired.Token, out _) == TokenCheck.Ok);
+    var expiredCode = store.CreatePairingCode(new[] { Scopes.ReadRaw });
+    clock.Advance(TimeSpan.FromMinutes(6));
+    t.Check("unused pairing code expires after 5 min", store.RedeemPairingCode(expiredCode.Code, "late") == null);
+    store.Revoke(paired.Token);
+    t.Check("revoked token rejected", store.Check(paired.Token, out _) == TokenCheck.Invalid);
 }
 
 t.Section("Stream core: chunking, timestamps, gaps");
@@ -167,8 +342,8 @@ t.Section("WebSocket server end to end");
 {
     var settings = new AppSettings
     {
-        DeveloperMode = true, RecordSession = false, LslEnabled = false, WebSocketPort = FreePort(), DevPagePort = FreePort(),
-        BleLatencyMs = 40
+        DeveloperMode = true, RecordSession = false, LslEnabled = false, WebSocketPort = FreePort(),
+        BleLatencyMs = 40, AllowedOrigins = { "http://localhost:5173" }
     };
     var appDir = AppContext.BaseDirectory;
     await using var engine = new LucidStreamEngine(settings, appDir, "Lucid-Stream selftest");
@@ -176,50 +351,51 @@ t.Section("WebSocket server end to end");
     await engine.StartStreamingAsync();
     var port = engine.ActivePort!.Value;
     var uri = new Uri($"ws://localhost:{port}/v1/stream");
-    const string devOrigin = "http://localhost:8766";
+    const string appOrigin = "http://localhost:5173";
+    string PairHello(string code) => $"{{\"type\":\"hello\",\"schema\":\"1.0\",\"pairing_code\":\"{code}\",\"client\":\"selftest-browser\"}}";
 
-    var url = engine.CreateListenUrl();
-    var token = url.Split("#token=")[1].Split('&')[0];
-    t.Check("launch URL carries token and port in the fragment", url.Contains($"&port={port}") && url.StartsWith("http://localhost:") && url.Contains('#'));
-
-    // Non-allowlisted origin -> 4005 before any data
+    // Non-allowlisted origin -> 4005 before any data, even with a valid pairing code
+    var unusedCode = engine.CreatePairingCode(new[] { Scopes.ReadRaw });
     using (var bad = new ClientWebSocket())
     {
         bad.Options.SetRequestHeader("Origin", "https://not-approved.example");
         await bad.ConnectAsync(uri, default);
-        var (closeCode, gotData) = await WaitClose(bad, sendHello: JsonHello(token));
+        var (closeCode, gotData) = await WaitClose(bad, sendHello: PairHello(unusedCode.Code));
         t.Check($"non-allowlisted origin closed with 4005 (got {closeCode})", closeCode == 4005 && !gotData);
     }
 
-    // Launch token without browser origin -> 4001
+    // Unknown token -> 4001
     using (var native = new ClientWebSocket())
     {
         await native.ConnectAsync(uri, default);
-        var (closeCode, _) = await WaitClose(native, JsonHello(token));
-        t.Check($"launch token from non-browser client -> 4001 (got {closeCode})", closeCode == 4001);
+        var (closeCode, _) = await WaitClose(native, JsonHello("not-a-token"));
+        t.Check($"unknown token -> 4001 (got {closeCode})", closeCode == 4001);
     }
 
     // Wrong schema -> 4002
     using (var oldSchema = new ClientWebSocket())
     {
-        oldSchema.Options.SetRequestHeader("Origin", devOrigin);
+        oldSchema.Options.SetRequestHeader("Origin", appOrigin);
         await oldSchema.ConnectAsync(uri, default);
-        var (closeCode, _) = await WaitClose(oldSchema, $"{{\"type\":\"hello\",\"schema\":\"2.0\",\"token\":\"{token}\"}}");
+        var (closeCode, _) = await WaitClose(oldSchema, "{\"type\":\"hello\",\"schema\":\"2.0\",\"token\":\"x\"}");
         t.Check($"unsupported schema -> 4002 (got {closeCode})", closeCode == 4002);
     }
 
-    // Allowed origin + launch token -> welcome, binary + JSON data
-    var listen = new ClientWebSocket();
-    listen.Options.SetRequestHeader("Origin", devOrigin);
-    await listen.ConnectAsync(uri, default);
-    await SendText(listen, JsonHello(token));
-    var welcome = JsonDocument.Parse((await ReceiveText(listen))!).RootElement;
+    // Browser app on an allowed origin pairs -> welcome with token, binary + JSON data
+    var browserCode = engine.CreatePairingCode(new[] { Scopes.ReadRaw, Scopes.ReadProcessed });
+    var app1 = new ClientWebSocket();
+    app1.Options.SetRequestHeader("Origin", appOrigin);
+    await app1.ConnectAsync(uri, default);
+    await SendText(app1, PairHello(browserCode.Code));
+    var welcome = JsonDocument.Parse((await ReceiveText(app1))!).RootElement;
     t.Check("welcome received", welcome.GetProperty("type").GetString() == "welcome");
+    var token = welcome.GetProperty("token").GetString()!;
+    t.Check("client listed as a browser app", engine.Clients().Any(c => c.Kind == "Browser" && c.Origin == appOrigin));
     t.Check("welcome scopes read:processed + read:raw", welcome.GetProperty("scopes").EnumerateArray().Select(e => e.GetString()).OrderBy(s => s).SequenceEqual(new[] { "read:processed", "read:raw" }));
     t.Check("welcome mode live, 7 streams", welcome.GetProperty("mode").GetString() == "live" && welcome.GetProperty("streams").GetArrayLength() == 7);
 
-    await SendText(listen, "{\"type\":\"subscribe\",\"streams\":[\"eeg.raw\"],\"encoding\":\"binary\"}");
-    await SendText(listen, "{\"type\":\"subscribe\",\"streams\":[\"bandpower\"],\"encoding\":\"json\"}");
+    await SendText(app1, "{\"type\":\"subscribe\",\"streams\":[\"eeg.raw\"],\"encoding\":\"binary\"}");
+    await SendText(app1, "{\"type\":\"subscribe\",\"streams\":[\"bandpower\"],\"encoding\":\"json\"}");
     BinaryFrameCodec.Decoded? firstBinary = null;
     JsonElement? bandJson = null;
     long lastRawIndex = -1;
@@ -227,7 +403,7 @@ t.Section("WebSocket server end to end");
     var deadline = DateTime.UtcNow.AddSeconds(8);
     while (DateTime.UtcNow < deadline && (firstBinary == null || bandJson == null || !sawStatus))
     {
-        var (isText, payload) = await Receive(listen);
+        var (isText, payload) = await Receive(app1);
         if (!isText) { var d = BinaryFrameCodec.Decode(payload); firstBinary ??= d; lastRawIndex = d.Index + d.Samples - 1; }
         else
         {
@@ -242,27 +418,27 @@ t.Section("WebSocket server end to end");
     t.Check("status message delivered", sawStatus);
 
     var timeBefore = Clock.Now;
-    await SendText(listen, $"{{\"type\":\"time_sync\",\"client_send\":{timeBefore.ToString(System.Globalization.CultureInfo.InvariantCulture)}}}");
+    await SendText(app1, $"{{\"type\":\"time_sync\",\"client_send\":{timeBefore.ToString(System.Globalization.CultureInfo.InvariantCulture)}}}");
 
     // marker without write:markers -> error, connection stays
-    await SendText(listen, "{\"type\":\"marker\",\"label\":\"x\"}");
+    await SendText(app1, "{\"type\":\"marker\",\"label\":\"x\"}");
 
     // Reconnect with the same token: new connection supersedes old (4009), resume fills from buffer
     await Task.Delay(300);
-    var listen2 = new ClientWebSocket();
-    listen2.Options.SetRequestHeader("Origin", devOrigin);
-    await listen2.ConnectAsync(uri, default);
-    await SendText(listen2, $"{{\"type\":\"hello\",\"schema\":\"1.0\",\"token\":\"{token}\",\"resume_from\":{{\"eeg.raw\":{lastRawIndex}}}}}");
-    var (oldClose, _) = await WaitClose(listen, null);
+    var app2 = new ClientWebSocket();
+    app2.Options.SetRequestHeader("Origin", appOrigin);
+    await app2.ConnectAsync(uri, default);
+    await SendText(app2, $"{{\"type\":\"hello\",\"schema\":\"1.0\",\"token\":\"{token}\",\"resume_from\":{{\"eeg.raw\":{lastRawIndex}}}}}");
+    var (oldClose, _) = await WaitClose(app1, null);
     t.Check($"older connection superseded with 4009 (got {oldClose})", oldClose == 4009);
-    var w2 = JsonDocument.Parse((await ReceiveText(listen2))!).RootElement;
+    var w2 = JsonDocument.Parse((await ReceiveText(app2))!).RootElement;
     t.Check("reconnect gets same session id", w2.GetProperty("session").GetString() == welcome.GetProperty("session").GetString());
-    await SendText(listen2, "{\"type\":\"subscribe\",\"streams\":[\"eeg.raw\"],\"encoding\":\"binary\"}");
+    await SendText(app2, "{\"type\":\"subscribe\",\"streams\":[\"eeg.raw\"],\"encoding\":\"binary\"}");
     BinaryFrameCodec.Decoded? firstAfterResume = null;
     deadline = DateTime.UtcNow.AddSeconds(5);
     while (DateTime.UtcNow < deadline && firstAfterResume == null)
     {
-        var (isText, payload) = await Receive(listen2);
+        var (isText, payload) = await Receive(app2);
         if (!isText) firstAfterResume = BinaryFrameCodec.Decode(payload);
     }
     t.Check($"resume continues right after last index (next index {firstAfterResume?.Index}, last {lastRawIndex})",
@@ -291,26 +467,16 @@ t.Section("WebSocket server end to end");
         t.Check($"reserved stream lucidify.lsi -> 4003 (got {closeCode})", closeCode == 4003);
     }
 
-    // Stop listening -> 4007
-    engine.StopListening();
-    var (stopClose, _) = await WaitClose(listen2, null);
-    t.Check($"Stop listening closes the page with 4007 (got {stopClose})", stopClose == 4007);
-
-    // Expired/revoked token on reconnect -> 4001 (revoked)
+    // Revoking the token closes the connection with 4007, and it cannot reconnect (4001)
+    engine.Tokens.Revoke(token);
+    var (stopClose, _) = await WaitClose(app2, null);
+    t.Check($"revoked token closes the connection with 4007 (got {stopClose})", stopClose == 4007);
     using (var after = new ClientWebSocket())
     {
-        after.Options.SetRequestHeader("Origin", devOrigin);
+        after.Options.SetRequestHeader("Origin", appOrigin);
         await after.ConnectAsync(uri, default);
         var (closeCode, _) = await WaitClose(after, JsonHello(token));
-        t.Check($"revoked launch token cannot reconnect (got {closeCode})", closeCode == 4001);
-    }
-
-    // Developer Listen page served with CSP
-    using (var http = new HttpClient())
-    {
-        var resp = await http.GetAsync(engine.DevPageUrl);
-        t.Check("dev Listen page served", resp.IsSuccessStatusCode);
-        t.Check("dev page has strict CSP", resp.Headers.TryGetValues("Content-Security-Policy", out var csp) && csp.First().Contains("script-src 'self'"));
+        t.Check($"revoked token cannot reconnect (got {closeCode})", closeCode == 4001);
     }
     await engine.StopStreamingAsync();
 }
@@ -442,6 +608,115 @@ static async Task<(int Code, bool GotData)> WaitClose(ClientWebSocket ws, string
     }
     catch (Exception) { }
     return ((int?)ws.CloseStatus ?? -1, gotData);
+}
+
+/// <summary>Minimal stand-in for the Lucidify Cloud session API (same routes and fields as OrgApi.kt).</summary>
+sealed class FakeCloud : IAsyncDisposable
+{
+    public sealed class Chunk
+    {
+        public int Seq; public long First; public int Count; public long TStartMs, TEndMs; public string Sha = ""; public byte[] Payload = Array.Empty<byte>(); public bool Verified;
+    }
+
+    private Microsoft.AspNetCore.Builder.WebApplication _app = null!;
+    public string BaseUrl { get; private set; } = "";
+    public int SessionInits;
+    public bool Finalized;
+    public int FinalSeq = -1;
+    public bool PutSawAuthorization;
+    public System.Collections.Concurrent.ConcurrentDictionary<string, Chunk> Chunks = new();
+    public System.Collections.Concurrent.ConcurrentBag<string> IdempotencyKeys = new();
+    public System.Collections.Concurrent.ConcurrentBag<string> Events = new();
+
+    public void Reset() { SessionInits = 0; Finalized = false; FinalSeq = -1; Chunks.Clear(); }
+
+    public static async Task<FakeCloud> StartAsync()
+    {
+        var f = new FakeCloud();
+        var port = FreePortStatic();
+        var b = Microsoft.AspNetCore.Builder.WebApplication.CreateSlimBuilder();
+        b.WebHost.UseUrls($"http://127.0.0.1:{port}");
+        b.Logging.ClearProviders();
+        var app = b.Build();
+        f._app = app;
+        f.BaseUrl = $"http://127.0.0.1:{port}";
+        const string S = "/v1/org/{org}/subjects/{subj}/session";
+
+        async Task<System.Text.Json.Nodes.JsonObject> Body(Microsoft.AspNetCore.Http.HttpContext c)
+        {
+            if (c.Request.Headers.TryGetValue("Idempotency-Key", out var k)) f.IdempotencyKeys.Add(k.ToString());
+            return (System.Text.Json.Nodes.JsonObject)(await System.Text.Json.Nodes.JsonNode.ParseAsync(c.Request.Body))!;
+        }
+        Microsoft.AspNetCore.Http.IResult Json(object o) => Microsoft.AspNetCore.Http.Results.Json(o);
+        bool Authed(Microsoft.AspNetCore.Http.HttpContext c) => c.Request.Headers.Authorization.ToString() == "Bearer test-token";
+
+        app.MapPost(S + "/init", async (Microsoft.AspNetCore.Http.HttpContext c) =>
+        {
+            if (!Authed(c)) return Microsoft.AspNetCore.Http.Results.StatusCode(401);
+            await Body(c);
+            Interlocked.Increment(ref f.SessionInits);
+            return Json(new { sessionId = "sess-1", chunkSeconds = 5, sessionStartEpochMs = 1, reused = false });
+        });
+        app.MapPost(S + "/{sid}/chunk/init", async (Microsoft.AspNetCore.Http.HttpContext c) =>
+        {
+            var j = await Body(c);
+            var key = j["clientChunkKey"]!.GetValue<string>();
+            var ch = f.Chunks.GetOrAdd(key, _ => new Chunk());
+            ch.Seq = j["seq"]!.GetValue<int>(); ch.First = j["firstSampleIndex"]!.GetValue<long>(); ch.Count = j["sampleCount"]!.GetValue<int>();
+            ch.TStartMs = j["tStartMs"]!.GetValue<long>(); ch.TEndMs = j["tEndMs"]!.GetValue<long>(); ch.Sha = j["sha256"]!.GetValue<string>();
+            return Json(new { chunkId = "c" + ch.Seq, gcsPath = "x", signedPutUrl = $"{f.BaseUrl}/put/{Uri.EscapeDataString(key)}?X-Goog-Signature=abc", uploadRequired = true, alreadyVerified = false });
+        });
+        app.MapPut("/put/{key}", async (Microsoft.AspNetCore.Http.HttpContext c, string key) =>
+        {
+            if (c.Request.Headers.ContainsKey("Authorization")) f.PutSawAuthorization = true;
+            using var ms = new MemoryStream();
+            await c.Request.Body.CopyToAsync(ms);
+            f.Chunks[key].Payload = ms.ToArray();
+            return Microsoft.AspNetCore.Http.Results.Ok();
+        });
+        app.MapPost(S + "/{sid}/chunk/{cid}/complete", async (Microsoft.AspNetCore.Http.HttpContext c) =>
+        {
+            var j = await Body(c);
+            var ch = f.Chunks[j["clientChunkKey"]!.GetValue<string>()];
+            var sha = Convert.ToBase64String(SHA256.HashData(ch.Payload));
+            ch.Verified = sha == ch.Sha;
+            return Json(new { status = ch.Verified ? "verified" : "mismatch", verified = ch.Verified, bytes = ch.Payload.Length, sha256 = sha });
+        });
+        app.MapGet(S + "/{sid}/coverage", () =>
+        {
+            var through = -1L;
+            foreach (var ch in f.Chunks.Values.Where(x => x.Verified).OrderBy(x => x.First)) if (ch.First <= through + 1) through = Math.Max(through, ch.First + ch.Count - 1);
+            return Json(new { contiguousThroughSample = through, verifiedRanges = Array.Empty<object>(), missingRanges = Array.Empty<object>(), finalized = f.Finalized });
+        });
+        app.MapPost(S + "/{sid}/finalization-intent", async (Microsoft.AspNetCore.Http.HttpContext c) => { await Body(c); return Json(new { status = "ok" }); });
+        app.MapPost(S + "/{sid}/finalize", async (Microsoft.AspNetCore.Http.HttpContext c) =>
+        {
+            var j = await Body(c);
+            f.FinalSeq = j["finalSeqExclusive"]!.GetValue<int>();
+            f.Finalized = true;
+            return Json(new { status = "finalized", finalized = true, manifestPath = "m" });
+        });
+        app.MapGet(S + "/{sid}/manifest", () => Json(new { finalized = f.Finalized, chunks = f.Chunks.Values.Select(x => new { seq = x.Seq }).ToArray() }));
+        app.MapPost(S + "/{sid}/events", async (Microsoft.AspNetCore.Http.HttpContext c) =>
+        {
+            var j = await Body(c);
+            foreach (var e in j["events"]!.AsArray()) f.Events.Add(e!["label"]!.GetValue<string>());
+            return Json(new { results = j["events"]!.AsArray().Select(_ => new { status = "created" }).ToArray() });
+        });
+        await app.StartAsync();
+        return f;
+    }
+
+    private static int FreePortStatic()
+    {
+        var l = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        l.Start();
+        var p = ((System.Net.IPEndPoint)l.LocalEndpoint).Port;
+        l.Stop();
+        return p;
+    }
+
+    public async ValueTask DisposeAsync() => await _app.DisposeAsync();
 }
 
 sealed class FakeTime : ITimeSource
