@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Lucidify Listen (developer)</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="listen.css?v=6f48580872">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Listen</h1>
+      <p class="sub">Your live EEG, as sound. Reference page served by Lucid-Stream in developer mode.</p>
+    </header>
+
+    <section id="noToken" class="card hidden">
+      <h2>Open this page from Lucid-Stream</h2>
+      <p>Tap <strong>Listen</strong> in the Lucid-Stream app on this computer. The app opens this page with a one-time link.</p>
+    </section>
+
+    <section id="intro" class="card hidden">
+      <h2>Before you start</h2>
+      <p>This page connects to the Lucid-Stream app running on this computer. Your browser may ask to
+         <strong>connect to devices on your local network</strong> or <strong>apps on this device</strong>. Choose <strong>Allow</strong>.</p>
+      <p class="muted">Your EEG stays on this computer. It goes from the app to this page and is turned into sound here.</p>
+      <button id="start" class="primary">Start listening</button>
+    </section>
+
+    <section id="denied" class="card warn hidden">
+      <h2>Connection blocked by the browser</h2>
+      <p>To allow it, click the icon left of the address bar, open <strong>Site settings</strong>, and set
+         <strong>Local network access</strong> (or <strong>Apps on device</strong>) to <strong>Allow</strong>. Then reload this page.</p>
+    </section>
+
+    <section id="live" class="hidden">
+      <div class="statusbar">
+        <span id="conn" class="pill">Connecting</span>
+        <span id="mode" class="pill subtle hidden">Replay</span>
+        <span id="device" class="muted"></span>
+        <span id="battery" class="muted"></span>
+      </div>
+
+      <div class="card">
+        <canvas id="scope" width="900" height="220" aria-label="Live EEG trace, Fp1 and Fp2"></canvas>
+        <div class="legend"><span class="sw fp1"></span>Fp1 <span class="sw fp2"></span>Fp2 <span class="muted">filtered, last 5 s</span></div>
+      </div>
+
+      <div class="card">
+        <h2>Bands</h2>
+        <div id="bars" class="bars"></div>
+        <p class="muted small">Relative power, average of both channels. Each band drives one voice of the sound.</p>
+      </div>
+
+      <div class="controls">
+        <label>Volume <input id="volume" type="range" min="0" max="1" step="0.01" value="0.5"></label>
+        <button id="stop">Stop</button>
+      </div>
+      <p id="message" class="message"></p>
+    </section>
+
+    <footer class="muted small">Research use only. Not for diagnosis or clinical decision-making.</footer>
+  </main>
+  <script src="listen.js?v=405c9c1141"></script>
+</body>
+</html>

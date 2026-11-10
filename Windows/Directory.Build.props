@@ -1,0 +1,9 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <Company>Lucidify</Company>
+    <Product>Lucid-Stream</Product>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+</Project>

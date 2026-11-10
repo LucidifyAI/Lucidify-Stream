@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>LucidStream.Core</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Kestrel WebSocket server and static files for the developer Listen page. Ships with .NET; no NuGet packages. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shipped Origin allowlist and developer Listen page, copied next to every app that references Core. -->
+    <None Include="..\..\config\allowlist.json" Link="config\allowlist.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\web\listen-dev\**\*" Link="web\listen-dev\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- liblsl native library, fetched by tools\get-liblsl.ps1 into lib\. Optional: without it LSL output is disabled. -->
+    <None Include="..\..\lib\lsl.dll" Condition="Exists('..\..\lib\lsl.dll')" Link="lsl.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- Windows 10 SDK projection gives the Bluetooth LE (WinRT) APIs. -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <!-- Only for the system-tray NotifyIcon. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- Explicit usings avoid WPF / WinForms name clashes (Application, MessageBox, ...). -->
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>LucidStream</AssemblyName>
+    <RootNamespace>LucidStream.App</RootNamespace>
+    <ApplicationTitle>Lucid-Stream</ApplicationTitle>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LucidStream.Core\LucidStream.Core.csproj" />
+  </ItemGroup>
+
+</Project>
