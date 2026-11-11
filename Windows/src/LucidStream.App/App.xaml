@@ -1,7 +1,6 @@
 <Application x:Class="LucidStream.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             StartupUri="MainWindow.xaml"
              ShutdownMode="OnExplicitShutdown">
     <!--
         Lucidify Cloud look: near-black page with a soft purple glow, dark rounded cards, teal accent,
@@ -34,7 +33,7 @@
         <SolidColorBrush x:Key="HoverFillBrush" Color="#1C1A24"/>
         <SolidColorBrush x:Key="TraceBrush" Color="#07070B"/>
         <SolidColorBrush x:Key="WarnBrush" Color="#F2A25C"/>
-        <SolidColorBrush x:Key="PillBorderBrush" Color="#CFCCD6"/>
+        <SolidColorBrush x:Key="PillBorderBrush" Color="#36323D"/>
 
         <!-- Cards: a faint glow in the lower-right corner, as on the Cloud home page. -->
         <RadialGradientBrush x:Key="CardFillBrush" Center="0.92,1.05" GradientOrigin="0.92,1.05" RadiusX="0.55" RadiusY="0.9">
@@ -205,7 +204,7 @@
             </Setter>
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="BorderBrush" Value="White"/>
+                    <Setter Property="BorderBrush" Value="#5A5563"/>
                     <Setter Property="Background" Value="#12FFFFFF"/>
                 </Trigger>
                 <Trigger Property="IsPressed" Value="True">
@@ -213,6 +212,42 @@
                 </Trigger>
                 <Trigger Property="IsEnabled" Value="False">
                     <Setter Property="Opacity" Value="0.35"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Tan button for Connect: same tan as the status-bar messages, quiet outline. -->
+        <Style x:Key="Accent" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Foreground" Value="{StaticResource WarnBrush}"/>
+            <Setter Property="Background" Value="#1AF2A25C"/>
+            <Setter Property="BorderBrush" Value="#5E4430"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#2EF2A25C"/>
+                    <Setter Property="BorderBrush" Value="#8A6240"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#40F2A25C"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Round grey icon button with a white glyph and no outline (settings cog). -->
+        <Style x:Key="IconButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="Background" Value="#2A2731"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FontFamily" Value="{StaticResource IconFont}"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Width" Value="36"/>
+            <Setter Property="MinWidth" Value="36"/>
+            <Setter Property="Height" Value="36"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#3A3642"/>
+                </Trigger>
+                <Trigger Property="IsPressed" Value="True">
+                    <Setter Property="Background" Value="#46414F"/>
                 </Trigger>
             </Style.Triggers>
         </Style>

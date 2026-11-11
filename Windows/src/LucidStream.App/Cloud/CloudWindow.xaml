@@ -2,6 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        xmlns:live="clr-namespace:LucidStream.App.Live"
         Title="Lucid-Stream - Lucidify Cloud" Width="1360" Height="940" MinWidth="900" MinHeight="600"
         Background="{StaticResource PageBrush}" Foreground="{StaticResource BodyBrush}"
         FontFamily="{StaticResource UiFont}" FontSize="13" UseLayoutRounding="True"
@@ -36,20 +37,12 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel>
                     <TextBlock Text="Live from the patch (this PC, straight from Bluetooth or the dongle)" Style="{StaticResource SubTitle}" Margin="0,0,0,6"/>
-                    <Border Height="110" Background="{StaticResource TraceBrush}" BorderBrush="{StaticResource CardBorderBrush}"
+                    <Border Height="150" Background="Black" BorderBrush="{StaticResource CardBorderBrush}"
                             BorderThickness="1" CornerRadius="10" Padding="1">
-                        <Canvas x:Name="TraceCanvas" ClipToBounds="True" SizeChanged="TraceCanvas_SizeChanged">
-                            <Polyline x:Name="AfzLine" Stroke="#38C6D6" StrokeThickness="1.2"/>
-                            <Polyline x:Name="Fp2Line" Stroke="#AA73ED" StrokeThickness="1.2"/>
-                        </Canvas>
+                        <live:SweepView x:Name="LocalSweep" ClipToBounds="True"/>
                     </Border>
-                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                        <Rectangle Width="14" Height="3" Fill="#38C6D6" VerticalAlignment="Center"/>
-                        <TextBlock Text="AFz" Margin="6,0,14,0" Style="{StaticResource Hint}"/>
-                        <Rectangle Width="14" Height="3" Fill="#AA73ED" VerticalAlignment="Center"/>
-                        <TextBlock Text="Fp2" Margin="6,0,14,0" Style="{StaticResource Hint}"/>
-                        <TextBlock Text="Filtered 0.5-40 Hz, last 4 s. The Cloud page below shows what Cloud has received." Style="{StaticResource Hint}"/>
-                    </StackPanel>
+                    <TextBlock Text="Same sweep and settings as the main window. The Cloud page below shows what Cloud has received."
+                               Style="{StaticResource Hint}" Margin="0,6,0,0"/>
                 </StackPanel>
                 <StackPanel Grid.Column="2" VerticalAlignment="Center">
                     <TextBlock Text="Delay" Style="{StaticResource SubTitle}" Margin="0,0,0,6"/>

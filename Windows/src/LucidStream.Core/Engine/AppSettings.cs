@@ -7,6 +7,33 @@ using LucidStream.Core.Ws;
 
 namespace LucidStream.Core.Engine;
 
+/// <summary>Live view options. Defaults match the Lucidify Cloud viewer.</summary>
+public sealed class LiveViewSettings
+{
+    // Waveform
+    public double WaveWindowSeconds { get; set; } = 10;
+
+    /// <summary>"auto" or a half-range in microvolts per row.</summary>
+    public string Amplitude { get; set; } = "auto";
+
+    public double Gain { get; set; } = 1;
+
+    /// <summary>"display" (as in the Cloud viewer), "filtered" (0.5-40 Hz) or "raw".</summary>
+    public string Signal { get; set; } = "display";
+
+    // Spectrogram
+    public double SpecWindowSeconds { get; set; } = 600;
+    public double SpecMaxHz { get; set; } = 30;
+    public double SpecFftSeconds { get; set; } = 2;
+    public double SpecOverlapPercent { get; set; } = 87.5;
+    public double SpecBrightnessDb { get; set; }
+    public double SpecGamma { get; set; } = 1.3;
+    public bool SpecNotch { get; set; } = true;
+
+    /// <summary>"both", "afz" or "fp2".</summary>
+    public string SpecChannels { get; set; } = "both";
+}
+
 /// <summary>User settings, stored as JSON in %LOCALAPPDATA%\LucidStream\settings.json.</summary>
 public sealed class AppSettings
 {
@@ -43,6 +70,9 @@ public sealed class AppSettings
 
     /// <summary>Firebase JS SDK version the Cloud viewer loads (the app asks the page's Firebase session for tokens).</summary>
     public string CloudFirebaseJsVersion { get; set; } = "10.7.1";
+
+    /// <summary>How the live waveform and spectrogram are shown (the settings under each view).</summary>
+    public LiveViewSettings LiveView { get; set; } = new();
 
     /// <summary>Developer mode: the simulated patch and replay sources.</summary>
     public bool DeveloperMode { get; set; }

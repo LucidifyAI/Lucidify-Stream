@@ -9,7 +9,7 @@ using System.Windows.Media.Imaging;
 namespace LucidStream.App;
 
 /// <summary>
-/// Lucidify look outside the XAML: the mark as window and tray icon, and a dark Windows title bar.
+/// Lucidify look outside the XAML: the mark as window icon, and a dark Windows title bar.
 /// The mark's geometry matches the LogoMark resource in App.xaml (traced from the brand PNG, 382 x 478 units).
 /// </summary>
 internal static class Branding
@@ -51,20 +51,6 @@ internal static class Branding
             g.FillEllipse(brush, p.X - radius, p.Y - radius, radius * 2, radius * 2);
         }
         return bmp;
-    }
-
-    /// <summary>Tray icon. The handle lives for the app's lifetime.</summary>
-    public static Icon CreateTrayIcon()
-    {
-        try
-        {
-            using var bmp = DrawMark(32);
-            return Icon.FromHandle(bmp.GetHicon());
-        }
-        catch (Exception)
-        {
-            return SystemIcons.Application;
-        }
     }
 
     /// <summary>Window and taskbar icon.</summary>

@@ -15,7 +15,6 @@ public partial class CloudWindow : Window
 {
     private readonly CloudViewModel _vm;
     private CloudPageBridge? _bridge;
-    private float[]? _lastA, _lastB;
     private bool _allowClose;
 
     public CloudWindow(CloudViewModel vm, MainViewModel main)
@@ -23,7 +22,16 @@ public partial class CloudWindow : Window
         InitializeComponent();
         _vm = vm;
         DataContext = vm;
-        main.TraceUpdated += DrawTrace;
+        // The local sweep mirrors the main window's live view and its settings.
+        LocalSweep.Signal = main.Live;
+        LocalSweep.Running = main.IsStreaming;
+        main.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(MainViewModel.IsStreaming)) LocalSweep.Running = main.IsStreaming;
+        };
+        main.LiveViewReset += LocalSweep.ResetView;
+        IsVisibleChanged += (_, _) => ApplyLiveView(main.Settings.LiveView);
+        ApplyLiveView(main.Settings.LiveView);
         var icon = Branding.CreateWindowIcon();
         if (icon != null) Icon = icon;
         SourceInitialized += (_, _) => Branding.ApplyDarkTitleBar(this);
@@ -72,22 +80,14 @@ public partial class CloudWindow : Window
         Dispatcher.BeginInvoke(new Action(Hide));
     }
 
-    // ------------------------------------------------------------------ local trace
+    // ------------------------------------------------------------------ local sweep
 
-    private void TraceCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
+    private void ApplyLiveView(LucidStream.Core.Engine.LiveViewSettings v)
     {
-        if (_lastA != null && _lastB != null) DrawTrace(_lastA, _lastB);
-    }
-
-    private void DrawTrace(float[] afz, float[] fp2)
-    {
-        _lastA = afz;
-        _lastB = fp2;
-        if (!IsVisible) return;
-        var w = TraceCanvas.ActualWidth;
-        var h = TraceCanvas.ActualHeight;
-        if (w < 10 || h < 10) return;
-        AfzLine.Points = MainWindow.Lane(afz, w, h * 0.28, h * 0.22);
-        Fp2Line.Points = MainWindow.Lane(fp2, w, h * 0.72, h * 0.22);
+        LocalSweep.WindowSeconds = v.WaveWindowSeconds;
+        LocalSweep.FixedMicrovolts = v.Amplitude == "auto" ? null
+            : double.TryParse(v.Amplitude, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var uv) ? uv : 50;
+        LocalSweep.Gain = v.Gain;
+        LocalSweep.Mode = v.Signal switch { "raw" => Live.WaveSignal.Raw, "filtered" => Live.WaveSignal.Filtered, _ => Live.WaveSignal.Display };
     }
 }

@@ -72,7 +72,7 @@ t.Section("CGX Patch packets");
         var imp = (int)Math.Round((impOhm - CgxPatchFormat.ImpedanceOffsetOhms) / CgxPatchFormat.ImpedanceOhmsPerCount);
         Put(2, imp);
         Put(3, imp);
-        Put(9, (int)Math.Round(accZg / CgxPatchFormat.AccelGPerCount * 256));
+        Put(9, (int)Math.Round(accZg / CgxPatchFormat.AccelGPerCount));
         p[32] = 0x12;
         p[33] = (byte)Math.Round(volts * 25);
         p[35] = (byte)sd;

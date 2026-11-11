@@ -13,7 +13,7 @@ Research use only. Not for diagnosis or clinical decision-making.
 | Path | What it is |
 | --- | --- |
 | `src/LucidStream.Core` | Everything that matters: device sources, stream core (timestamps, sample index, gaps), filters and features, LSL outlets, WebSocket server (Origin allowlist, Host check, tokens, framing, resume, backpressure), session files, replay. No NuGet packages. |
-| `src/LucidStream.App` | The Windows app (WPF): patch, outputs, Start/Stop, Lucidify Cloud window, connected apps, pairing codes, markers, live trace and band bars, tray icon. Bluetooth adapter in `Ble/`. |
+| `src/LucidStream.App` | The Windows app (WPF). Main view: Connect, Start streaming, compact patch status (link, battery, contact), and the live signal drawn as in the Lucidify Cloud viewer: an oscilloscope sweep (window, amplitude, gain, signal) and a jet spectrogram that builds from the left (window, max frequency, FFT size, overlap, brightness, gamma, line-noise hiding, channels), plus band power. View settings are saved in settings.json. Everything else (source, outputs, Lucidify Cloud, connected apps and pairing, markers, developer options, log) is under the settings cog. Bluetooth adapter in `Ble/`. |
 | `src/LucidStream.Cli` | `lucid-stream` headless host on the same engine (USB dongle, simulator or replay), for lab PCs and web-client development. |
 | `tests/LucidStream.SelfTest` | 100 checks, no test packages needed. Exit code 0 = pass. |
 | `examples/python/ws_client.py` | Research client: pairing code, binary frames, band power. |
@@ -42,6 +42,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1
 | `-SkipTests`, `-SkipLsl`, `-Configuration Debug` | As named. |
 
 The script exits 0 on success and 1 on failure, and writes every command and its output to `artifacts\build.log`.
+Each build also puts **Lucid-Stream** in the Start menu (type the name in Start, or right-click it to pin it to the
+taskbar). Only one copy runs at a time: starting it again brings the running window forward.
 In Visual Studio, open `LucidStream.sln`, set `LucidStream.App` as the startup project and press F5.
 
 Without `lsl.dll` everything still runs; LSL output is simply disabled and the app says so.
@@ -83,6 +85,10 @@ Same thing headless: `dotnet run --project src\LucidStream.Cli -- --simulate --d
   only be connected to one thing at a time, so close the Android app's connection or unplug the dongle first.
 
 To force one, set `"connection": "dongle"` or `"bluetooth"` in the `ble` section of settings.json.
+
+If the patch goes out of range or is switched off, streaming keeps running and the app reconnects by itself as soon
+as the patch is back (the header shows "patch out of range, reconnecting"). The missing stretch is marked as a gap
+in every output, and a Cloud recording continues in the same session.
 
 What comes out, per CGX's *Patch EEG Bluetooth Data Interface Specification*:
 
@@ -148,6 +154,7 @@ per channel 5 absolute then 5 relative bands), `quality` (impedance + heuristic 
 ## Notes
 
 - Settings live in `%LOCALAPPDATA%\LucidStream\settings.json`.
-- Closing the window while streaming keeps Lucid-Stream in the tray; use the tray menu to stop and exit.
+- Lucid-Stream runs only while its window is open. Closing it stops streaming, disconnects the patch and stops any
+  Cloud recording (its upload is finished, or completed the next time the Cloud view opens).
 - Chrome asks once before a public HTTPS page can reach `localhost`. A good web app warns about that prompt before its
   first connection and shows how to re-enable it if blocked. Managed PCs can pre-grant it by policy.

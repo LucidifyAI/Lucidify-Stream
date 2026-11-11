@@ -100,8 +100,8 @@ public static class CgxPatchFormat
     public const double ImpedanceOffsetOhms = -28922;
 
     /// <summary>
-    /// Accelerometer: g = x * 6.4e-5 (CGX), taking x as the 16-bit reading (the 24-bit value / 256). With that reading
-    /// the range is about +/-2 g; the app logs the measured magnitude once so it can be checked against 1 g at rest.
+    /// Accelerometer: g = x * 6.4e-5 (CGX), x being the decoded 24-bit value. The app logs the measured magnitude
+    /// once per connection so it can be checked against 1 g at rest.
     /// </summary>
     public const double AccelGPerCount = 6.4e-5;
 
@@ -139,9 +139,9 @@ public static class CgxPatchFormat
             Fp2Uv: (float)(Sample24(p, 1, packing) * MicrovoltsPerCount),
             ImpedanceAfzOhm: (float)Math.Max(0, Sample24(p, 2, packing) * ImpedanceOhmsPerCount + ImpedanceOffsetOhms),
             ImpedanceFp2Ohm: (float)Math.Max(0, Sample24(p, 3, packing) * ImpedanceOhmsPerCount + ImpedanceOffsetOhms),
-            AccX: (float)(Sample24(p, 7, packing) / 256.0 * AccelGPerCount),
-            AccY: (float)(Sample24(p, 8, packing) / 256.0 * AccelGPerCount),
-            AccZ: (float)(Sample24(p, 9, packing) / 256.0 * AccelGPerCount),
+            AccX: (float)(Sample24(p, 7, packing) * AccelGPerCount),
+            AccY: (float)(Sample24(p, 8, packing) * AccelGPerCount),
+            AccZ: (float)(Sample24(p, 9, packing) * AccelGPerCount),
             ImpedanceFlag: p[32],
             BatteryVolts: (float)(p[33] * BatteryVoltsPerCount),
             SdCard: p[35],
@@ -199,7 +199,7 @@ public sealed class CgxStreamParser
 
     private bool _checksLogged;
     private long _checkOdd;
-    private double _checkAccMag;
+    private double _checkAccMag, _checkAx, _checkAy, _checkAz;
     private int _checkCount;
     private int _impFlag = -1;
 
@@ -403,6 +403,9 @@ public sealed class CgxStreamParser
         if (_checksLogged) return;
         _checkOdd += p.OddPayloadBytes;
         _checkAccMag += Math.Sqrt(p.AccX * p.AccX + p.AccY * p.AccY + p.AccZ * p.AccZ);
+        _checkAx += p.AccX;
+        _checkAy += p.AccY;
+        _checkAz += p.AccZ;
         _checkCount++;
         if (p.ImpedanceFlag != 0x12 && _impFlag != p.ImpedanceFlag)
         {
@@ -421,7 +424,8 @@ public sealed class CgxStreamParser
                 Log.Warn($"Data format check FAILED: {_checkOdd:N0} of {payloadBytes:N0} payload bytes have bit 0 set, which the CGX packing never produces. " +
                          "Tell the Lucid-Stream developers; setting \"packing\": \"plain24\" in settings.json decodes the way the Android app does.");
         }
-        Log.Info($"Accelerometer magnitude {_checkAccMag / _checkCount:0.00} g (about 1 g when the patch is still).");
+        Log.Info($"Accelerometer magnitude {_checkAccMag / _checkCount:0.000} g (about 1 g when the patch is still); " +
+                 $"mean X {_checkAx / _checkCount:0.000}, Y {_checkAy / _checkCount:0.000}, Z {_checkAz / _checkCount:0.000} g.");
         if (BytesDiscarded > 0) Log.Info($"Resynchronized on the byte stream; {BytesDiscarded:N0} bytes skipped so far.");
     }
 

@@ -1,10 +1,88 @@
 <Window x:Class="LucidStream.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Lucid-Stream" Width="1200" Height="880" MinWidth="1000" MinHeight="680"
+        xmlns:local="clr-namespace:LucidStream.App"
+        xmlns:live="clr-namespace:LucidStream.App.Live"
+        Title="Lucid-Stream" Width="1280" Height="860" MinWidth="980" MinHeight="620"
         Background="{StaticResource PageBrush}" Foreground="{StaticResource BodyBrush}"
         FontFamily="{StaticResource UiFont}" FontSize="13" UseLayoutRounding="True"
         WindowStartupLocation="CenterScreen">
+
+    <Window.Resources>
+        <!-- Small round status dot: good (teal), poor (amber), none (grey). -->
+        <Style x:Key="Dot" TargetType="Ellipse">
+            <Setter Property="Width" Value="9"/>
+            <Setter Property="Height" Value="9"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Fill" Value="{StaticResource FaintBrush}"/>
+            <Style.Triggers>
+                <Trigger Property="Tag" Value="good">
+                    <Setter Property="Fill" Value="{StaticResource TealBrush}"/>
+                </Trigger>
+                <Trigger Property="Tag" Value="poor">
+                    <Setter Property="Fill" Value="{StaticResource WarnBrush}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="StatusGlyph" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource IconFont}"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{StaticResource FaintBrush}"/>
+        </Style>
+        <Style x:Key="StatusText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{StaticResource BodyBrush}"/>
+            <Setter Property="Margin" Value="5,0,0,0"/>
+        </Style>
+        <!-- "Settings >" link on a live view card, as in the Cloud viewer. -->
+        <Style x:Key="SettingsToggle" TargetType="ToggleButton">
+            <Setter Property="Foreground" Value="#8C96B4"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border Background="Transparent" Padding="6,3">
+                            <ContentPresenter/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                </Trigger>
+                <Trigger Property="IsChecked" Value="True">
+                    <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="ViewSettingLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0,0,8,6"/>
+        </Style>
+        <!-- A card whose content fills the space it is given (for the live views). -->
+        <Style x:Key="FillCard" TargetType="ContentControl">
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ContentControl">
+                        <Border Background="{StaticResource CardFillBrush}" BorderBrush="{StaticResource CardBorderBrush}"
+                                BorderThickness="1" CornerRadius="16" Padding="18,14,18,16">
+                            <ContentPresenter/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
 
     <Grid>
         <!-- Page glow, as on the Cloud site -->
@@ -12,368 +90,484 @@
         <Rectangle Fill="{StaticResource PageTealGlowBrush}" IsHitTestVisible="False"/>
 
         <DockPanel>
-            <!-- ============================================================ header -->
+            <!-- ============================================================ header: status and the two main actions -->
             <Border DockPanel.Dock="Top" Background="{StaticResource HeaderBrush}" BorderBrush="{StaticResource DividerBrush}"
-                    BorderThickness="0,0,0,1" Padding="28,14">
+                    BorderThickness="0,0,0,1" Padding="22,10">
                 <DockPanel>
                     <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
-                        <Image Source="{StaticResource LogoMark}" Height="30" VerticalAlignment="Center"/>
-                        <TextBlock FontFamily="{StaticResource DisplayFont}" FontSize="22" FontWeight="SemiBold"
+                        <Image Source="{StaticResource LogoMark}" Height="28" VerticalAlignment="Center"/>
+                        <TextBlock FontFamily="{StaticResource DisplayFont}" FontSize="20" FontWeight="SemiBold"
                                    Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" Margin="10,0,0,0">
                             <Run Text="Lucidify"/><Run Text="TM" FontSize="8" BaselineAlignment="Superscript"/>
                         </TextBlock>
                         <TextBlock Text="STREAM" Foreground="{StaticResource MutedBrush}" FontSize="12" FontWeight="Bold"
-                                   VerticalAlignment="Center" Margin="16,3,0,0"/>
+                                   VerticalAlignment="Center" Margin="14,3,0,0"/>
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                        <TextBlock Text="Research use only. Not for diagnosis or clinical decision-making."
-                                   Foreground="{StaticResource FaintBrush}" FontSize="12" VerticalAlignment="Center" Margin="0,0,18,0"/>
-                        <Border CornerRadius="18" BorderThickness="1" Padding="14,7">
-                            <Border.Style>
-                                <Style TargetType="Border">
-                                    <Setter Property="BorderBrush" Value="{StaticResource PillBorderBrush}"/>
-                                    <Setter Property="Background" Value="Transparent"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsStreaming}" Value="True">
-                                            <Setter Property="BorderBrush" Value="{StaticResource CardHiBorderBrush}"/>
-                                            <Setter Property="Background" Value="{StaticResource TileHiBrush}"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Border.Style>
-                            <StackPanel Orientation="Horizontal">
-                                <Ellipse Width="8" Height="8" Margin="0,0,8,0" VerticalAlignment="Center">
-                                    <Ellipse.Style>
-                                        <Style TargetType="Ellipse">
-                                            <Setter Property="Fill" Value="{StaticResource FaintBrush}"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsStreaming}" Value="True">
-                                                    <Setter Property="Fill" Value="{StaticResource TealBrush}"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Ellipse.Style>
-                                </Ellipse>
-                                <TextBlock Text="{Binding StateText}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold"/>
-                            </StackPanel>
-                        </Border>
+
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="Connect" Command="{Binding ConnectCommand}" Style="{StaticResource Accent}"
+                                Visibility="{Binding IsDisconnected, Converter={StaticResource BoolToVis}}"/>
+                        <Button Content="Disconnect" Command="{Binding DisconnectCommand}"
+                                Visibility="{Binding IsLinked, Converter={StaticResource BoolToVis}}"/>
+                        <Button Content="Start streaming" Command="{Binding StartStreamingCommand}" Style="{StaticResource Primary}" Padding="22,7"
+                                Visibility="{Binding IsNotStreaming, Converter={StaticResource BoolToVis}}"/>
+                        <Button Content="Stop streaming" Command="{Binding StopStreamingCommand}" Padding="22,7"
+                                Visibility="{Binding IsStreaming, Converter={StaticResource BoolToVis}}"/>
+                        <Button x:Name="SettingsButton" Content="&#xE713;" Style="{StaticResource IconButton}" FontSize="16"
+                                Margin="6,0,0,0" ToolTip="Settings" Click="Settings_Click"/>
+                    </StackPanel>
+
+                    <!-- compact patch status: link, battery, contact, stream state -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,18,0">
+                        <StackPanel Orientation="Horizontal" ToolTip="{Binding LinkTooltip}" Background="Transparent" Margin="0,0,18,0">
+                            <TextBlock Text="&#xE702;">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock" BasedOn="{StaticResource StatusGlyph}">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding LinkState}" Value="up">
+                                                <Setter Property="Foreground" Value="{StaticResource TealBrush}"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding LinkState}" Value="lost">
+                                                <Setter Property="Foreground" Value="{StaticResource WarnBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="{Binding LinkText}" Style="{StaticResource StatusText}"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" ToolTip="{Binding Battery}" Background="Transparent" Margin="0,0,18,0">
+                            <TextBlock Text="{Binding BatteryGlyph}" Style="{StaticResource StatusGlyph}" Foreground="{StaticResource BodyBrush}"/>
+                            <TextBlock Text="{Binding BatteryVolts}" Style="{StaticResource StatusText}"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" ToolTip="{Binding ContactTooltip}" Background="Transparent">
+                            <TextBlock Text="AFz" Style="{StaticResource StatusText}" Margin="0,0,5,0"/>
+                            <Ellipse Style="{StaticResource Dot}" Tag="{Binding ContactAfz}"/>
+                            <TextBlock Text="Fp2" Style="{StaticResource StatusText}" Margin="12,0,5,0"/>
+                            <Ellipse Style="{StaticResource Dot}" Tag="{Binding ContactFp2}"/>
+                        </StackPanel>
                     </StackPanel>
                 </DockPanel>
             </Border>
 
             <!-- ============================================================ status bar -->
             <Border DockPanel.Dock="Bottom" Background="{StaticResource HeaderBrush}" BorderBrush="{StaticResource DividerBrush}"
-                    BorderThickness="0,1,0,0" Padding="28,8">
+                    BorderThickness="0,1,0,0" Padding="22,6">
                 <DockPanel>
+                    <TextBlock Text="Research use only. Not for diagnosis or clinical decision-making." DockPanel.Dock="Right"
+                               Foreground="{StaticResource FaintBrush}" FontSize="11" Margin="16,0,0,0"/>
                     <TextBlock Text="{Binding Error}" Foreground="{StaticResource WarnBrush}" DockPanel.Dock="Right"
-                               TextTrimming="CharacterEllipsis" MaxWidth="560"/>
+                               TextTrimming="CharacterEllipsis" MaxWidth="520"/>
                     <TextBlock Text="{Binding StatusLine}" Foreground="{StaticResource FaintBrush}" TextTrimming="CharacterEllipsis"/>
                 </DockPanel>
             </Border>
 
-            <!-- ============================================================ page -->
-            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                <StackPanel Margin="28,26,28,10">
-                    <TextBlock Text="LIVE EEG STREAMING" Style="{StaticResource Eyebrow}"/>
-                    <TextBlock Text="Stream your patch to LSL and the web." Style="{StaticResource H1}"/>
-                    <TextBlock Text="Connect the patch, choose outputs, then start streaming. Any LSL or WebSocket app can then read the signals."
-                               Style="{StaticResource Lead}"/>
+            <!-- ============================================================ live view (most of the window) -->
+            <Grid>
+                <Grid Margin="20,16,20,14">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="1*"/>
+                        <RowDefinition Height="14"/>
+                        <RowDefinition Height="1*"/>
+                    </Grid.RowDefinitions>
 
-                    <Grid Margin="0,24,0,0">
+                    <!-- waveform: oscilloscope sweep, drawn like the Cloud viewer -->
+                    <ContentControl Grid.Row="0" Style="{StaticResource FillCard}">
+                        <DockPanel>
+                            <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                                <ToggleButton x:Name="WaveSettingsToggle" DockPanel.Dock="Right" Content="Settings &#x203A;" Style="{StaticResource SettingsToggle}"/>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="Live EEG" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource DisplayFont}" FontSize="16" FontWeight="SemiBold"/>
+                                    <TextBlock x:Name="WaveCaption" Text="10 s sweep" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,2,0,0"/>
+                                </StackPanel>
+                            </DockPanel>
+                            <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,10"
+                                       Visibility="{Binding IsChecked, ElementName=WaveSettingsToggle, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="Window" Style="{StaticResource ViewSettingLabel}"/>
+                                <ComboBox x:Name="WaveWindowBox" Width="80" Margin="0,0,16,6" SelectionChanged="ViewSetting_Changed">
+                                    <ComboBoxItem Content="5 s" Tag="5"/>
+                                    <ComboBoxItem Content="10 s" Tag="10"/>
+                                    <ComboBoxItem Content="30 s" Tag="30"/>
+                                    <ComboBoxItem Content="60 s" Tag="60"/>
+                                </ComboBox>
+                                <TextBlock Text="Amplitude" Style="{StaticResource ViewSettingLabel}"/>
+                                <ComboBox x:Name="AmplitudeBox" Width="96" Margin="0,0,16,6" SelectionChanged="ViewSetting_Changed">
+                                    <ComboBoxItem Content="Auto" Tag="auto"/>
+                                    <ComboBoxItem Content="&#xB1;10 &#xB5;V" Tag="10"/>
+                                    <ComboBoxItem Content="&#xB1;25 &#xB5;V" Tag="25"/>
+                                    <ComboBoxItem Content="&#xB1;50 &#xB5;V" Tag="50"/>
+                                    <ComboBoxItem Content="&#xB1;100 &#xB5;V" Tag="100"/>
+                                    <ComboBoxItem Content="&#xB1;200 &#xB5;V" Tag="200"/>
+                                    <ComboBoxItem Content="&#xB1;500 &#xB5;V" Tag="500"/>
+                                </ComboBox>
+                                <TextBlock Text="Fine gain" Style="{StaticResource ViewSettingLabel}"/>
+                                <Slider x:Name="GainSlider" Width="120" Minimum="0.25" Maximum="12" SmallChange="0.05" LargeChange="0.5"
+                                        VerticalAlignment="Center" Margin="0,0,6,6" ValueChanged="ViewSetting_Changed"/>
+                                <TextBlock x:Name="GainText" Text="1.00x" Style="{StaticResource ViewSettingLabel}" MinWidth="40"/>
+                                <TextBlock Text="Signal" Style="{StaticResource ViewSettingLabel}"/>
+                                <ComboBox x:Name="SignalBox" Width="210" Margin="0,0,0,6" SelectionChanged="ViewSetting_Changed">
+                                    <ComboBoxItem Content="Display filtered (as Cloud)" Tag="display"/>
+                                    <ComboBoxItem Content="Filtered 0.5-40 Hz" Tag="filtered"/>
+                                    <ComboBoxItem Content="Raw" Tag="raw"/>
+                                </ComboBox>
+                            </WrapPanel>
+                            <Border BorderBrush="{StaticResource CardBorderBrush}" BorderThickness="1" CornerRadius="10" Padding="1" Background="Black">
+                                <live:SweepView x:Name="Sweep" ClipToBounds="True"/>
+                            </Border>
+                        </DockPanel>
+                    </ContentControl>
+
+                    <!-- spectrograms and band power -->
+                    <Grid Grid.Row="2">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="430"/>
-                            <ColumnDefinition Width="20"/>
                             <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="14"/>
+                            <ColumnDefinition Width="230"/>
                         </Grid.ColumnDefinitions>
-
-                        <!-- ======================== left column -->
-                        <StackPanel Grid.Column="0">
-                            <HeaderedContentControl Style="{StaticResource Card}" Header="Patch" Tag="&#xE702;">
-                                <StackPanel>
-                                    <ComboBox ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding SelectedSource}"
-                                              IsEnabled="{Binding IsDisconnected}" Margin="0,0,0,10">
-                                        <ComboBox.ItemTemplate>
-                                            <DataTemplate>
-                                                <TextBlock Text="{Binding Name}"/>
-                                            </DataTemplate>
-                                        </ComboBox.ItemTemplate>
+                        <ContentControl Style="{StaticResource FillCard}">
+                            <DockPanel>
+                                <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                                    <ToggleButton x:Name="SpecSettingsToggle" DockPanel.Dock="Right" Content="Settings &#x203A;" Style="{StaticResource SettingsToggle}"/>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="Spectrogram" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource DisplayFont}" FontSize="16" FontWeight="SemiBold"/>
+                                        <TextBlock x:Name="SpecCaption" Text="raw EEG, 2 s FFT" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="12,2,0,0"/>
+                                    </StackPanel>
+                                </DockPanel>
+                                <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,10"
+                                           Visibility="{Binding IsChecked, ElementName=SpecSettingsToggle, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="Window" Style="{StaticResource ViewSettingLabel}"/>
+                                    <ComboBox x:Name="SpecWindowBox" Width="86" Margin="0,0,16,6" SelectionChanged="ViewSetting_Changed">
+                                        <ComboBoxItem Content="1 min" Tag="60"/>
+                                        <ComboBoxItem Content="5 min" Tag="300"/>
+                                        <ComboBoxItem Content="10 min" Tag="600"/>
+                                        <ComboBoxItem Content="30 min" Tag="1800"/>
                                     </ComboBox>
-                                    <Grid Visibility="{Binding IsReplaySelected, Converter={StaticResource BoolToVis}}" Margin="0,0,0,6">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBox Text="{Binding ReplayFolder, UpdateSourceTrigger=PropertyChanged}" ToolTip="Session folder containing session.json"/>
-                                        <Button Grid.Column="1" Content="Browse" Margin="8,0,0,0" Click="BrowseReplay_Click"/>
-                                    </Grid>
-                                    <CheckBox Content="Loop replay" IsChecked="{Binding LoopReplay}"
-                                              Visibility="{Binding IsReplaySelected, Converter={StaticResource BoolToVis}}"/>
-                                    <StackPanel Orientation="Horizontal" Margin="0,6,0,16">
-                                        <Button Content="Connect" Command="{Binding ConnectCommand}" Style="{StaticResource Primary}"/>
-                                        <Button Content="Disconnect" Command="{Binding DisconnectCommand}"/>
-                                    </StackPanel>
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="96"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
-                                        </Grid.RowDefinitions>
-                                        <TextBlock Grid.Row="0" Text="Device" Style="{StaticResource Label}"/>
-                                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding DeviceName}" Style="{StaticResource Value}"/>
-                                        <TextBlock Grid.Row="1" Text="Firmware" Style="{StaticResource Label}"/>
-                                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Firmware}" Style="{StaticResource Value}"/>
-                                        <TextBlock Grid.Row="2" Text="Battery" Style="{StaticResource Label}"/>
-                                        <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Battery}" Style="{StaticResource Value}"/>
-                                        <TextBlock Grid.Row="3" Text="AFz" Style="{StaticResource Label}"/>
-                                        <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Fp1Contact}" Style="{StaticResource Value}"/>
-                                        <TextBlock Grid.Row="4" Text="Fp2" Style="{StaticResource Label}"/>
-                                        <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Fp2Contact}" Style="{StaticResource Value}"/>
-                                    </Grid>
-                                </StackPanel>
-                            </HeaderedContentControl>
-
-                            <HeaderedContentControl Style="{StaticResource Card}" Header="Outputs" Tag="&#xE968;">
-                                <StackPanel IsEnabled="{Binding IsNotStreaming}">
-                                    <CheckBox Content="Lab Streaming Layer (LSL)" IsChecked="{Binding LslEnabled}" IsEnabled="{Binding LslAvailable}" FontWeight="SemiBold"/>
-                                    <TextBlock Text="{Binding LslHint}" Style="{StaticResource Hint}" Margin="26,0,0,6"/>
-                                    <ItemsControl ItemsSource="{Binding LslStreams}" Margin="26,0,0,12" IsEnabled="{Binding LslEnabled}">
-                                        <ItemsControl.ItemsPanel>
-                                            <ItemsPanelTemplate>
-                                                <WrapPanel/>
-                                            </ItemsPanelTemplate>
-                                        </ItemsControl.ItemsPanel>
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <CheckBox Content="{Binding Label}" IsChecked="{Binding Enabled}" Width="170" Foreground="{StaticResource BodyBrush}"/>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-
-                                    <TextBlock Text="WebSocket" Style="{StaticResource SubTitle}"/>
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="ws://localhost:" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
-                                        <TextBox Text="{Binding Port, UpdateSourceTrigger=LostFocus}" Width="70" Margin="4,0"/>
-                                        <TextBlock Text="/v1/stream" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
-                                    </StackPanel>
-                                    <TextBlock Text="Always on while streaming. Browser pages on this PC connect here." Style="{StaticResource Hint}" Margin="0,6,0,8"/>
-                                    <CheckBox Content="LAN mode: let paired apps on this network connect" IsChecked="{Binding LanEnabled}"/>
-                                    <StackPanel Visibility="{Binding LanEnabled, Converter={StaticResource BoolToVis}}" Margin="26,2,0,6">
-                                        <TextBlock Text="Use only on trusted lab networks. LAN traffic is not encrypted in v1."
-                                                   Foreground="{StaticResource WarnBrush}" TextWrapping="Wrap" FontSize="12"/>
-                                        <ComboBox ItemsSource="{Binding LanAddresses}" SelectedItem="{Binding LanAddress}" Width="200"
-                                                  HorizontalAlignment="Left" Margin="0,6,0,0"/>
-                                    </StackPanel>
-
-                                    <TextBlock Text="Recording and filters" Style="{StaticResource SubTitle}" Margin="0,12,0,6"/>
-                                    <CheckBox Content="Save a local session file" IsChecked="{Binding RecordSession}"/>
-                                    <Grid Margin="26,4,0,8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBox Text="{Binding RecordFolder, UpdateSourceTrigger=LostFocus}"/>
-                                        <Button Grid.Column="1" Content="Open" Margin="8,0,0,0" Command="{Binding OpenRecordingsCommand}"/>
-                                    </Grid>
-                                    <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
-                                        <TextBlock Text="Line-noise notch" VerticalAlignment="Center" Foreground="{StaticResource TextBrush}" Margin="0,0,10,0"/>
-                                        <ComboBox ItemsSource="{Binding LineFrequencies}" SelectedItem="{Binding LineFrequency}" Width="100"/>
-                                    </StackPanel>
-                                </StackPanel>
-                            </HeaderedContentControl>
-
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
-                                <Button Content="Start streaming" Command="{Binding StartStreamingCommand}" Style="{StaticResource Primary}" Padding="24,9"/>
-                                <Button Content="Stop streaming" Command="{Binding StopStreamingCommand}" Padding="24,9"/>
-                            </StackPanel>
-
-                            <HeaderedContentControl Style="{StaticResource CardPurple}" Header="Lucidify Cloud" Tag="&#xE753;">
-                                <StackPanel DataContext="{Binding Cloud}">
-                                    <TextBlock Text="{Binding State}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" TextWrapping="Wrap"/>
-                                    <TextBlock Text="{Binding Target}" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                    <TextBlock Text="{Binding Delay}" Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                    <TextBlock Text="{Binding Problem}" Foreground="{StaticResource WarnBrush}" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                    <WrapPanel Margin="0,12,0,0">
-                                        <Button Content="Open Cloud view" Command="{Binding OpenCommand}"/>
-                                        <Button Content="Record to Cloud" Command="{Binding StartCommand}" Style="{StaticResource Primary}"/>
-                                        <Button Content="Stop" Command="{Binding StopCommand}"/>
-                                    </WrapPanel>
-                                    <TextBlock Text="Sign in and pick the organization and patient in the Cloud view. Recording sends the raw patch data as a new Cloud session, as the Android app does."
-                                               Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,8,0,0"/>
-                                </StackPanel>
-                            </HeaderedContentControl>
-
-                            <HeaderedContentControl Style="{StaticResource Card}" Header="Developer" Tag="&#xE713;">
-                                <Expander Header="Developer settings">
-                                    <StackPanel>
-                                        <CheckBox Content="Developer mode (simulated patch, replay)" IsChecked="{Binding DeveloperMode}" IsEnabled="{Binding IsDisconnected}"/>
-                                        <TextBlock Text="Web pages allowed to connect (one origin per line)" Foreground="{StaticResource TextBrush}" Margin="0,10,0,4"/>
-                                        <TextBox Text="{Binding AllowedOrigins, UpdateSourceTrigger=LostFocus}" AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="54" VerticalScrollBarVisibility="Auto"/>
-                                        <TextBlock Text="For browser apps only. A site address such as https://app.example.org (a full page address works too), or http://localhost:5173 while developing. Applies right away. Apps outside a browser just need a pairing code." Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                            <TextBlock Text="BLE latency correction (ms)" VerticalAlignment="Center" Foreground="{StaticResource TextBrush}" Margin="0,0,10,0"/>
-                                            <TextBox Text="{Binding BleLatencyMs, UpdateSourceTrigger=LostFocus}" Width="70"/>
-                                        </StackPanel>
-                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                            <TextBlock Text="Study code (optional, no names)" VerticalAlignment="Center" Foreground="{StaticResource TextBrush}" Margin="0,0,10,0"/>
-                                            <TextBox Text="{Binding StudyCode, UpdateSourceTrigger=LostFocus}" Width="130"/>
-                                        </StackPanel>
-                                        <Button Content="Export log &#x2192;" Command="{Binding ExportLogCommand}" Style="{StaticResource Link}" HorizontalAlignment="Left" Margin="0,14,0,0"/>
-                                    </StackPanel>
-                                </Expander>
-                            </HeaderedContentControl>
-                        </StackPanel>
-
-                        <!-- ======================== right column -->
-                        <StackPanel Grid.Column="2">
-                            <HeaderedContentControl Style="{StaticResource CardHi}" Header="Connected apps" Tag="&#xE716;">
-                                <StackPanel>
-                                    <Grid Margin="0,0,0,6">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="2*"/>
-                                            <ColumnDefinition Width="2*"/>
-                                            <ColumnDefinition Width="64"/>
-                                            <ColumnDefinition Width="2*"/>
-                                            <ColumnDefinition Width="64"/>
-                                            <ColumnDefinition Width="64"/>
-                                            <ColumnDefinition Width="64"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="APP" Style="{StaticResource ColumnHead}"/>
-                                        <TextBlock Grid.Column="1" Text="ORIGIN" Style="{StaticResource ColumnHead}"/>
-                                        <TextBlock Grid.Column="2" Text="TYPE" Style="{StaticResource ColumnHead}"/>
-                                        <TextBlock Grid.Column="3" Text="PERMISSIONS" Style="{StaticResource ColumnHead}"/>
-                                        <TextBlock Grid.Column="4" Text="SINCE" Style="{StaticResource ColumnHead}"/>
-                                        <TextBlock Grid.Column="5" Text="FRAMES" Style="{StaticResource ColumnHead}"/>
-                                        <TextBlock Grid.Column="6" Text="DROPPED" Style="{StaticResource ColumnHead}"/>
-                                    </Grid>
-                                    <ItemsControl ItemsSource="{Binding Clients}">
-                                        <ItemsControl.Style>
-                                            <Style TargetType="ItemsControl">
-                                                <Style.Triggers>
-                                                    <Trigger Property="HasItems" Value="False">
-                                                        <Setter Property="Template">
-                                                            <Setter.Value>
-                                                                <ControlTemplate TargetType="ItemsControl">
-                                                                    <Border BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,1,0,0" Padding="0,12">
-                                                                        <TextBlock Text="No apps connected yet." Foreground="{StaticResource FaintBrush}"/>
-                                                                    </Border>
-                                                                </ControlTemplate>
-                                                            </Setter.Value>
-                                                        </Setter>
-                                                    </Trigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </ItemsControl.Style>
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <Border BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,1,0,0" Padding="0,9">
-                                                    <Grid>
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="2*"/>
-                                                            <ColumnDefinition Width="2*"/>
-                                                            <ColumnDefinition Width="64"/>
-                                                            <ColumnDefinition Width="2*"/>
-                                                            <ColumnDefinition Width="64"/>
-                                                            <ColumnDefinition Width="64"/>
-                                                            <ColumnDefinition Width="64"/>
-                                                        </Grid.ColumnDefinitions>
-                                                        <TextBlock Grid.Column="0" Text="{Binding Name}" Style="{StaticResource Cell}" Foreground="{StaticResource TextBrush}"/>
-                                                        <TextBlock Grid.Column="1" Text="{Binding Origin}" Style="{StaticResource Cell}"/>
-                                                        <TextBlock Grid.Column="2" Text="{Binding Kind}" Style="{StaticResource Cell}"/>
-                                                        <TextBlock Grid.Column="3" Text="{Binding Scopes}" Style="{StaticResource Cell}"/>
-                                                        <TextBlock Grid.Column="4" Text="{Binding Since}" Style="{StaticResource Cell}"/>
-                                                        <TextBlock Grid.Column="5" Text="{Binding Frames}" Style="{StaticResource Cell}"/>
-                                                        <TextBlock Grid.Column="6" Text="{Binding Dropped}" Style="{StaticResource Cell}"/>
-                                                    </Grid>
-                                                </Border>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-
-                                    <TextBlock Text="Pair an app" Style="{StaticResource SubTitle}" Margin="0,16,0,6"/>
-                                    <WrapPanel>
-                                        <CheckBox Content="Processed" IsChecked="{Binding PairProcessed}" Margin="0,4,16,4"/>
-                                        <CheckBox Content="Raw EEG" IsChecked="{Binding PairRaw}" Margin="0,4,16,4"/>
-                                        <CheckBox Content="Send markers" IsChecked="{Binding PairMarkers}" Margin="0,4,16,4"/>
-                                        <Button Content="Show pairing code" Command="{Binding PairCommand}"/>
-                                    </WrapPanel>
-                                    <TextBlock Text="{Binding PairingCode}" FontFamily="{StaticResource MonoFont}" FontSize="30" FontWeight="SemiBold"
-                                               Foreground="{StaticResource TextBrush}" Margin="0,8,0,0"/>
-                                    <TextBlock Text="{Binding PairingHint}" Style="{StaticResource Hint}"/>
-                                </StackPanel>
-                            </HeaderedContentControl>
-
-                            <HeaderedContentControl Style="{StaticResource Card}" Header="Markers" Tag="&#xE7C1;">
-                                <StackPanel>
-                                    <ItemsControl ItemsSource="{Binding MarkerPresets}">
-                                        <ItemsControl.ItemsPanel>
-                                            <ItemsPanelTemplate>
-                                                <WrapPanel/>
-                                            </ItemsPanelTemplate>
-                                        </ItemsControl.ItemsPanel>
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <Button Content="{Binding}" Style="{StaticResource Chip}"
-                                                        Command="{Binding DataContext.PresetMarkerCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                        CommandParameter="{Binding}"/>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                    <Grid Margin="0,4,0,0">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBox x:Name="MarkerBox" Text="{Binding MarkerText, UpdateSourceTrigger=PropertyChanged}" KeyDown="MarkerBox_KeyDown"/>
-                                        <Button Grid.Column="1" Content="Add marker" Margin="8,0,0,0" Command="{Binding SendMarkerCommand}"/>
-                                    </Grid>
-                                </StackPanel>
-                            </HeaderedContentControl>
-
-                            <HeaderedContentControl Style="{StaticResource CardPurple}" Header="Live signal" Tag="&#xE9D9;">
-                                <StackPanel>
-                                    <Border Height="180" Background="{StaticResource TraceBrush}" BorderBrush="{StaticResource CardBorderBrush}"
-                                            BorderThickness="1" CornerRadius="10" Padding="1">
-                                        <Canvas x:Name="TraceCanvas" ClipToBounds="True" SizeChanged="TraceCanvas_SizeChanged">
-                                            <Polyline x:Name="Fp1Line" Stroke="#38C6D6" StrokeThickness="1.3"/>
-                                            <Polyline x:Name="Fp2Line" Stroke="#AA73ED" StrokeThickness="1.3"/>
-                                        </Canvas>
+                                    <TextBlock Text="Max frequency" Style="{StaticResource ViewSettingLabel}"/>
+                                    <Slider x:Name="MaxHzSlider" Width="110" Minimum="10" Maximum="100" SmallChange="1" LargeChange="5" IsSnapToTickEnabled="True" TickFrequency="1"
+                                            VerticalAlignment="Center" Margin="0,0,6,6" ValueChanged="ViewSetting_Changed"/>
+                                    <TextBlock x:Name="MaxHzText" Text="30 Hz" Style="{StaticResource ViewSettingLabel}" MinWidth="44"/>
+                                    <TextBlock Text="FFT window" Style="{StaticResource ViewSettingLabel}"/>
+                                    <ComboBox x:Name="FftBox" Width="70" Margin="0,0,16,6" SelectionChanged="ViewSetting_Changed">
+                                        <ComboBoxItem Content="1 s" Tag="1"/>
+                                        <ComboBoxItem Content="2 s" Tag="2"/>
+                                        <ComboBoxItem Content="4 s" Tag="4"/>
+                                    </ComboBox>
+                                    <TextBlock Text="Overlap" Style="{StaticResource ViewSettingLabel}"/>
+                                    <ComboBox x:Name="OverlapBox" Width="80" Margin="0,0,16,6" SelectionChanged="ViewSetting_Changed">
+                                        <ComboBoxItem Content="50 %" Tag="50"/>
+                                        <ComboBoxItem Content="75 %" Tag="75"/>
+                                        <ComboBoxItem Content="87.5 %" Tag="87.5"/>
+                                    </ComboBox>
+                                    <TextBlock Text="Brightness" Style="{StaticResource ViewSettingLabel}"/>
+                                    <Slider x:Name="BrightnessSlider" Width="100" Minimum="-20" Maximum="20" SmallChange="1" LargeChange="3" IsSnapToTickEnabled="True" TickFrequency="1"
+                                            VerticalAlignment="Center" Margin="0,0,6,6" ValueChanged="ViewSetting_Changed"/>
+                                    <TextBlock x:Name="BrightnessText" Text="0 dB" Style="{StaticResource ViewSettingLabel}" MinWidth="44"/>
+                                    <TextBlock Text="Gamma" Style="{StaticResource ViewSettingLabel}"/>
+                                    <Slider x:Name="GammaSlider" Width="90" Minimum="0.5" Maximum="2.5" SmallChange="0.05" LargeChange="0.2"
+                                            VerticalAlignment="Center" Margin="0,0,6,6" ValueChanged="ViewSetting_Changed"/>
+                                    <TextBlock x:Name="GammaText" Text="1.30" Style="{StaticResource ViewSettingLabel}" MinWidth="36"/>
+                                    <CheckBox x:Name="NotchBox" Content="Hide line noise" Margin="0,0,16,6" VerticalAlignment="Center" Checked="ViewSetting_Changed" Unchecked="ViewSetting_Changed"/>
+                                    <TextBlock Text="Channels" Style="{StaticResource ViewSettingLabel}"/>
+                                    <ComboBox x:Name="SpecChannelsBox" Width="96" Margin="0,0,0,6" SelectionChanged="ViewSetting_Changed">
+                                        <ComboBoxItem Content="Both" Tag="both"/>
+                                        <ComboBoxItem Content="AFz" Tag="afz"/>
+                                        <ComboBoxItem Content="Fp2" Tag="fp2"/>
+                                    </ComboBox>
+                                </WrapPanel>
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition x:Name="SpecRowA"/>
+                                        <RowDefinition x:Name="SpecGap" Height="8"/>
+                                        <RowDefinition x:Name="SpecRowB"/>
+                                    </Grid.RowDefinitions>
+                                    <Border CornerRadius="8" ClipToBounds="True" Background="Black" x:Name="SpecAfzBorder">
+                                        <local:SpectrogramImage x:Name="SpecAfz" Label="AFz"/>
                                     </Border>
-                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,14">
-                                        <Rectangle Width="14" Height="3" Fill="#38C6D6" VerticalAlignment="Center"/>
-                                        <TextBlock Text="AFz" Margin="6,0,14,0" Style="{StaticResource Hint}"/>
-                                        <Rectangle Width="14" Height="3" Fill="#AA73ED" VerticalAlignment="Center"/>
-                                        <TextBlock Text="Fp2" Margin="6,0,14,0" Style="{StaticResource Hint}"/>
-                                        <TextBlock Text="Filtered 0.5-40 Hz, last 4 s, +/-60 uV per lane." Style="{StaticResource Hint}"/>
-                                    </StackPanel>
-                                    <ItemsControl ItemsSource="{Binding Bands}">
-                                        <ItemsControl.ItemTemplate>
-                                            <DataTemplate>
-                                                <Grid Margin="0,4">
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="64"/>
-                                                        <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="48"/>
-                                                    </Grid.ColumnDefinitions>
-                                                    <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextBrush}"/>
-                                                    <ProgressBar Grid.Column="1" Value="{Binding BarValue, Mode=OneWay}" Maximum="100" Style="{StaticResource BandBar}" VerticalAlignment="Center"/>
-                                                    <TextBlock Grid.Column="2" Text="{Binding Text}" HorizontalAlignment="Right" Foreground="{StaticResource MutedBrush}"/>
-                                                </Grid>
-                                            </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                    <TextBlock Text="Relative band power, average of both channels." Style="{StaticResource Hint}" Margin="0,6,0,0"/>
-                                </StackPanel>
-                            </HeaderedContentControl>
-
-                            <HeaderedContentControl Style="{StaticResource Card}" Header="Log" Tag="&#xE8A5;">
-                                <ListBox ItemsSource="{Binding LogLines}" Style="{StaticResource LogList}" Height="140"/>
-                            </HeaderedContentControl>
-                        </StackPanel>
+                                    <Border Grid.Row="2" CornerRadius="8" ClipToBounds="True" Background="Black" x:Name="SpecFp2Border">
+                                        <local:SpectrogramImage x:Name="SpecFp2" Label="Fp2" Channel="1"/>
+                                    </Border>
+                                </Grid>
+                            </DockPanel>
+                        </ContentControl>
+                        <ContentControl Grid.Column="2" Style="{StaticResource FillCard}">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Text="Band power" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource DisplayFont}"
+                                           FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
+                                <TextBlock DockPanel.Dock="Bottom" Text="Relative power, both channels." Style="{StaticResource Hint}" Margin="0,6,0,0"/>
+                    <ItemsControl ItemsSource="{Binding Bands}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="64"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="48"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextBrush}"/>
+                                    <ProgressBar Grid.Column="1" Value="{Binding BarValue, Mode=OneWay}" Maximum="100" Style="{StaticResource BandBar}" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding Text}" HorizontalAlignment="Right" Foreground="{StaticResource MutedBrush}"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                            </DockPanel>
+                        </ContentControl>
                     </Grid>
-                </StackPanel>
-            </ScrollViewer>
+                </Grid>
+
+                <!-- ============================================================ settings drawer -->
+                <Rectangle x:Name="SettingsDim" Fill="#99000000" Visibility="Collapsed" MouseDown="SettingsDim_MouseDown"/>
+                <Border x:Name="SettingsDrawer" Visibility="Collapsed" HorizontalAlignment="Right" Width="660"
+                        Background="{StaticResource PageBrush}" BorderBrush="{StaticResource DividerBrush}" BorderThickness="1,0,0,0">
+                    <DockPanel>
+                        <DockPanel DockPanel.Dock="Top" Margin="24,16,16,6">
+                            <Button DockPanel.Dock="Right" Content="&#xE711;" Style="{StaticResource IconButton}" FontSize="12"
+                                    Margin="0" ToolTip="Close settings" Click="CloseSettings_Click"/>
+                            <TextBlock Text="Settings" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource DisplayFont}"
+                                       FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        </DockPanel>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                            <StackPanel Margin="24,8,24,16">
+                        <HeaderedContentControl Style="{StaticResource Card}" Header="Patch and source" Tag="&#xE702;">
+                            <StackPanel>
+                                <ComboBox ItemsSource="{Binding SourceOptions}" SelectedItem="{Binding SelectedSource}"
+                                          IsEnabled="{Binding IsDisconnected}" Margin="0,0,0,10">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Name}"/>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Grid Visibility="{Binding IsReplaySelected, Converter={StaticResource BoolToVis}}" Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Text="{Binding ReplayFolder, UpdateSourceTrigger=PropertyChanged}" ToolTip="Session folder containing session.json"/>
+                                    <Button Grid.Column="1" Content="Browse" Margin="8,0,0,0" Click="BrowseReplay_Click"/>
+                                </Grid>
+                                <CheckBox Content="Loop replay" IsChecked="{Binding LoopReplay}"
+                                          Visibility="{Binding IsReplaySelected, Converter={StaticResource BoolToVis}}"/>
+                                <TextBlock Text="Connect with the button at the top. Change the source only while disconnected." Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,2,0,14"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="96"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/>
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Grid.Row="0" Text="Device" Style="{StaticResource Label}"/>
+                                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding DeviceName}" Style="{StaticResource Value}"/>
+                                    <TextBlock Grid.Row="1" Text="Firmware" Style="{StaticResource Label}"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Firmware}" Style="{StaticResource Value}"/>
+                                    <TextBlock Grid.Row="2" Text="Battery" Style="{StaticResource Label}"/>
+                                    <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Battery}" Style="{StaticResource Value}"/>
+                                    <TextBlock Grid.Row="3" Text="AFz" Style="{StaticResource Label}"/>
+                                    <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Fp1Contact}" Style="{StaticResource Value}"/>
+                                    <TextBlock Grid.Row="4" Text="Fp2" Style="{StaticResource Label}"/>
+                                    <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Fp2Contact}" Style="{StaticResource Value}"/>
+                                </Grid>
+                            </StackPanel>
+                        </HeaderedContentControl>
+
+                        <HeaderedContentControl Style="{StaticResource Card}" Header="Outputs" Tag="&#xE968;">
+                            <StackPanel IsEnabled="{Binding IsNotStreaming}">
+                                <CheckBox Content="Lab Streaming Layer (LSL)" IsChecked="{Binding LslEnabled}" IsEnabled="{Binding LslAvailable}" FontWeight="SemiBold"/>
+                                <TextBlock Text="{Binding LslHint}" Style="{StaticResource Hint}" Margin="26,0,0,6"/>
+                                <ItemsControl ItemsSource="{Binding LslStreams}" Margin="26,0,0,12" IsEnabled="{Binding LslEnabled}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Label}" IsChecked="{Binding Enabled}" Width="170" Foreground="{StaticResource BodyBrush}"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                        
+                                <TextBlock Text="WebSocket" Style="{StaticResource SubTitle}"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="ws://localhost:" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
+                                    <TextBox Text="{Binding Port, UpdateSourceTrigger=LostFocus}" Width="70" Margin="4,0"/>
+                                    <TextBlock Text="/v1/stream" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                                <TextBlock Text="Always on while streaming. Browser pages on this PC connect here." Style="{StaticResource Hint}" Margin="0,6,0,8"/>
+                                <CheckBox Content="LAN mode: let paired apps on this network connect" IsChecked="{Binding LanEnabled}"/>
+                                <StackPanel Visibility="{Binding LanEnabled, Converter={StaticResource BoolToVis}}" Margin="26,2,0,6">
+                                    <TextBlock Text="Use only on trusted lab networks. LAN traffic is not encrypted in v1."
+                                               Foreground="{StaticResource WarnBrush}" TextWrapping="Wrap" FontSize="12"/>
+                                    <ComboBox ItemsSource="{Binding LanAddresses}" SelectedItem="{Binding LanAddress}" Width="200"
+                                              HorizontalAlignment="Left" Margin="0,6,0,0"/>
+                                </StackPanel>
+                        
+                                <TextBlock Text="Recording and filters" Style="{StaticResource SubTitle}" Margin="0,12,0,6"/>
+                                <CheckBox Content="Save a local session file" IsChecked="{Binding RecordSession}"/>
+                                <Grid Margin="26,4,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Text="{Binding RecordFolder, UpdateSourceTrigger=LostFocus}"/>
+                                    <Button Grid.Column="1" Content="Open" Margin="8,0,0,0" Command="{Binding OpenRecordingsCommand}"/>
+                                </Grid>
+                                <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                                    <TextBlock Text="Line-noise notch" VerticalAlignment="Center" Foreground="{StaticResource TextBrush}" Margin="0,0,10,0"/>
+                                    <ComboBox ItemsSource="{Binding LineFrequencies}" SelectedItem="{Binding LineFrequency}" Width="100"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </HeaderedContentControl>
+
+                        <HeaderedContentControl Style="{StaticResource CardPurple}" Header="Lucidify Cloud" Tag="&#xE753;">
+                            <StackPanel DataContext="{Binding Cloud}">
+                                <TextBlock Text="{Binding State}" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                                <TextBlock Text="{Binding Target}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                <TextBlock Text="{Binding Delay}" Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                <TextBlock Text="{Binding Problem}" Foreground="{StaticResource WarnBrush}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                <WrapPanel Margin="0,12,0,0">
+                                    <Button Content="Open Cloud view" Command="{Binding OpenCommand}"/>
+                                    <Button Content="Record to Cloud" Command="{Binding StartCommand}" Style="{StaticResource Primary}"/>
+                                    <Button Content="Stop" Command="{Binding StopCommand}"/>
+                                </WrapPanel>
+                                <TextBlock Text="Sign in and pick the organization and patient in the Cloud view. Recording sends the raw patch data as a new Cloud session, as the Android app does."
+                                           Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </HeaderedContentControl>
+
+                        <HeaderedContentControl Style="{StaticResource CardHi}" Header="Connected apps" Tag="&#xE716;">
+                            <StackPanel>
+                                <Grid Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="2*"/>
+                                        <ColumnDefinition Width="2*"/>
+                                        <ColumnDefinition Width="64"/>
+                                        <ColumnDefinition Width="2*"/>
+                                        <ColumnDefinition Width="64"/>
+                                        <ColumnDefinition Width="64"/>
+                                        <ColumnDefinition Width="64"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="APP" Style="{StaticResource ColumnHead}"/>
+                                    <TextBlock Grid.Column="1" Text="ORIGIN" Style="{StaticResource ColumnHead}"/>
+                                    <TextBlock Grid.Column="2" Text="TYPE" Style="{StaticResource ColumnHead}"/>
+                                    <TextBlock Grid.Column="3" Text="PERMISSIONS" Style="{StaticResource ColumnHead}"/>
+                                    <TextBlock Grid.Column="4" Text="SINCE" Style="{StaticResource ColumnHead}"/>
+                                    <TextBlock Grid.Column="5" Text="FRAMES" Style="{StaticResource ColumnHead}"/>
+                                    <TextBlock Grid.Column="6" Text="DROPPED" Style="{StaticResource ColumnHead}"/>
+                                </Grid>
+                                <ItemsControl ItemsSource="{Binding Clients}">
+                                    <ItemsControl.Style>
+                                        <Style TargetType="ItemsControl">
+                                            <Style.Triggers>
+                                                <Trigger Property="HasItems" Value="False">
+                                                    <Setter Property="Template">
+                                                        <Setter.Value>
+                                                            <ControlTemplate TargetType="ItemsControl">
+                                                                <Border BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,1,0,0" Padding="0,12">
+                                                                    <TextBlock Text="No apps connected yet." Foreground="{StaticResource FaintBrush}"/>
+                                                                </Border>
+                                                            </ControlTemplate>
+                                                        </Setter.Value>
+                                                    </Setter>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ItemsControl.Style>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,1,0,0" Padding="0,9">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="2*"/>
+                                                        <ColumnDefinition Width="2*"/>
+                                                        <ColumnDefinition Width="64"/>
+                                                        <ColumnDefinition Width="2*"/>
+                                                        <ColumnDefinition Width="64"/>
+                                                        <ColumnDefinition Width="64"/>
+                                                        <ColumnDefinition Width="64"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0" Text="{Binding Name}" Style="{StaticResource Cell}" Foreground="{StaticResource TextBrush}"/>
+                                                    <TextBlock Grid.Column="1" Text="{Binding Origin}" Style="{StaticResource Cell}"/>
+                                                    <TextBlock Grid.Column="2" Text="{Binding Kind}" Style="{StaticResource Cell}"/>
+                                                    <TextBlock Grid.Column="3" Text="{Binding Scopes}" Style="{StaticResource Cell}"/>
+                                                    <TextBlock Grid.Column="4" Text="{Binding Since}" Style="{StaticResource Cell}"/>
+                                                    <TextBlock Grid.Column="5" Text="{Binding Frames}" Style="{StaticResource Cell}"/>
+                                                    <TextBlock Grid.Column="6" Text="{Binding Dropped}" Style="{StaticResource Cell}"/>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                        
+                                <TextBlock Text="Pair an app" Style="{StaticResource SubTitle}" Margin="0,16,0,6"/>
+                                <WrapPanel>
+                                    <CheckBox Content="Processed" IsChecked="{Binding PairProcessed}" Margin="0,4,16,4"/>
+                                    <CheckBox Content="Raw EEG" IsChecked="{Binding PairRaw}" Margin="0,4,16,4"/>
+                                    <CheckBox Content="Send markers" IsChecked="{Binding PairMarkers}" Margin="0,4,16,4"/>
+                                    <Button Content="Show pairing code" Command="{Binding PairCommand}"/>
+                                </WrapPanel>
+                                <TextBlock Text="{Binding PairingCode}" FontFamily="{StaticResource MonoFont}" FontSize="30" FontWeight="SemiBold"
+                                           Foreground="{StaticResource TextBrush}" Margin="0,8,0,0"/>
+                                <TextBlock Text="{Binding PairingHint}" Style="{StaticResource Hint}"/>
+                            </StackPanel>
+                        </HeaderedContentControl>
+
+                        <HeaderedContentControl Style="{StaticResource Card}" Header="Markers" Tag="&#xE7C1;">
+                            <StackPanel>
+                                <ItemsControl ItemsSource="{Binding MarkerPresets}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Button Content="{Binding}" Style="{StaticResource Chip}"
+                                                    Command="{Binding DataContext.PresetMarkerCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <Grid Margin="0,4,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="MarkerBox" Text="{Binding MarkerText, UpdateSourceTrigger=PropertyChanged}" KeyDown="MarkerBox_KeyDown"/>
+                                    <Button Grid.Column="1" Content="Add marker" Margin="8,0,0,0" Command="{Binding SendMarkerCommand}"/>
+                                </Grid>
+                            </StackPanel>
+                        </HeaderedContentControl>
+
+                        <HeaderedContentControl Style="{StaticResource Card}" Header="Developer" Tag="&#xE713;">
+                            <Expander Header="Developer settings">
+                                <StackPanel>
+                                    <CheckBox Content="Developer mode (simulated patch, replay)" IsChecked="{Binding DeveloperMode}" IsEnabled="{Binding IsDisconnected}"/>
+                                    <TextBlock Text="Web pages allowed to connect (one origin per line)" Foreground="{StaticResource TextBrush}" Margin="0,10,0,4"/>
+                                    <TextBox Text="{Binding AllowedOrigins, UpdateSourceTrigger=LostFocus}" AcceptsReturn="True" TextWrapping="NoWrap" MinHeight="54" VerticalScrollBarVisibility="Auto"/>
+                                    <TextBlock Text="For browser apps only. A site address such as https://app.example.org (a full page address works too), or http://localhost:5173 while developing. Applies right away. Apps outside a browser just need a pairing code." Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <TextBlock Text="BLE latency correction (ms)" VerticalAlignment="Center" Foreground="{StaticResource TextBrush}" Margin="0,0,10,0"/>
+                                        <TextBox Text="{Binding BleLatencyMs, UpdateSourceTrigger=LostFocus}" Width="70"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                        <TextBlock Text="Study code (optional, no names)" VerticalAlignment="Center" Foreground="{StaticResource TextBrush}" Margin="0,0,10,0"/>
+                                        <TextBox Text="{Binding StudyCode, UpdateSourceTrigger=LostFocus}" Width="130"/>
+                                    </StackPanel>
+                                    <Button Content="Export log &#x2192;" Command="{Binding ExportLogCommand}" Style="{StaticResource Link}" HorizontalAlignment="Left" Margin="0,14,0,0"/>
+                                </StackPanel>
+                            </Expander>
+                        </HeaderedContentControl>
+
+                        <HeaderedContentControl Style="{StaticResource Card}" Header="Log" Tag="&#xE8A5;">
+                            <ListBox ItemsSource="{Binding LogLines}" Style="{StaticResource LogList}" Height="220"/>
+                        </HeaderedContentControl>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
+            </Grid>
         </DockPanel>
     </Grid>
 </Window>

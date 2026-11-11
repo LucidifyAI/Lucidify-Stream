@@ -6,7 +6,7 @@
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <UseWPF>true</UseWPF>
-    <!-- Only for the system-tray NotifyIcon. -->
+    <!-- System.Drawing, used to draw the window icon. -->
     <UseWindowsForms>true</UseWindowsForms>
     <!-- Explicit usings avoid WPF / WinForms name clashes (Application, MessageBox, ...). -->
     <ImplicitUsings>disable</ImplicitUsings>
@@ -14,7 +14,28 @@
     <AssemblyName>LucidStream</AssemblyName>
     <RootNamespace>LucidStream.App</RootNamespace>
     <ApplicationTitle>Lucid-Stream</ApplicationTitle>
+    <!-- Icon of LucidStream.exe (Explorer, shortcuts, taskbar). Kept as text in Assets\app.ico.b64 and written to obj\ at build time. -->
+    <ApplicationIcon>$(BaseIntermediateOutputPath)app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <UsingTask TaskName="LucidStreamWriteIcon" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Source ParameterType="System.String" Required="true" />
+      <Destination ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        var bytes = System.Convert.FromBase64String(System.IO.File.ReadAllText(Source));
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(Destination)));
+        if (!System.IO.File.Exists(Destination) || System.IO.File.ReadAllBytes(Destination).Length != bytes.Length)
+            System.IO.File.WriteAllBytes(Destination, bytes);
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="LucidStreamIcon" BeforeTargets="BeforeBuild;CoreCompile" Inputs="Assets\app.ico.b64" Outputs="$(BaseIntermediateOutputPath)app.ico">
+    <LucidStreamWriteIcon Source="Assets\app.ico.b64" Destination="$(BaseIntermediateOutputPath)app.ico" />
+  </Target>
 
   <ItemGroup>
     <!-- Hosts the Lucidify Cloud viewer page (Microsoft Edge WebView2; the runtime ships with Windows 10 and 11). -->

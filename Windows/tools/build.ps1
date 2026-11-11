@@ -232,7 +232,25 @@ Add-Summary 'Build' ('OK ({0:0} s)' -f $buildTimer.Elapsed.TotalSeconds)
 
 $appExe = Get-ChildItem -Path (Join-Path $root "src\LucidStream.App\bin\$Configuration") -Recurse -Filter 'LucidStream.exe' -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -notmatch '\\publish\\' } | Select-Object -First 1
-if ($appExe) { Write-Host "App: $($appExe.FullName)" }
+if ($appExe) {
+    Write-Host "App: $($appExe.FullName)"
+    # Start menu entry, so the app can be found by typing "Lucid-Stream" in Start (and pinned to the taskbar).
+    try {
+        $programs = [Environment]::GetFolderPath('Programs')
+        $lnkPath = Join-Path $programs 'Lucid-Stream.lnk'
+        $shell = New-Object -ComObject WScript.Shell
+        $lnk = $shell.CreateShortcut($lnkPath)
+        $lnk.TargetPath = $appExe.FullName
+        $lnk.WorkingDirectory = $appExe.DirectoryName
+        $lnk.IconLocation = "$($appExe.FullName),0"
+        $lnk.Description = 'Lucid-Stream: stream the LucidPro patch to LSL and WebSockets'
+        $lnk.Save()
+        Write-Host "Start menu shortcut: $lnkPath"
+        Add-Summary 'Start menu shortcut' 'OK (Lucid-Stream)'
+    } catch {
+        Add-Summary 'Start menu shortcut' "skipped: $($_.Exception.Message)"
+    }
+}
 
 # ---------------------------------------------------------------------------- 5. self-tests
 

@@ -17,6 +17,7 @@ public sealed class PatchDongleSource : IEegSource, IRawPacketSource
     private readonly PatchBleSettings _settings;
     private readonly CgxStreamParser _parser;
     private IntPtr _handle;
+    private string _serial = "";
     private Thread? _reader;
     private volatile bool _stop;
 
@@ -77,22 +78,8 @@ public sealed class PatchDongleSource : IEegSource, IRawPacketSource
         var dongle = await Task.Run(Find, ct)
                      ?? throw new InvalidOperationException("No CGX USB dongle found. Plug it in, or connect over Bluetooth.");
         Log.Info($"Opening {dongle.Description} (dongle {dongle.Serial})...");
-        Check(Ft.FT_OpenEx(dongle.Serial, Ft.OpenBySerialNumber, out _handle), "open the dongle (is CGX software using it?)");
-        try
-        {
-            Check(Ft.FT_SetBaudRate(_handle, (uint)_settings.DongleBaud), "set the baud rate");
-            Check(Ft.FT_SetDataCharacteristics(_handle, 8, 0, 0), "set 8-N-1");
-            Check(Ft.FT_SetFlowControl(_handle, Ft.FlowRtsCts, 0x11, 0x13), "set RTS/CTS flow control");
-            Check(Ft.FT_SetLatencyTimer(_handle, 2), "set the latency timer");
-            Check(Ft.FT_SetTimeouts(_handle, 100, 100), "set timeouts");
-            Check(Ft.FT_Purge(_handle, Ft.PurgeRx | Ft.PurgeTx), "clear the buffers");
-        }
-        catch
-        {
-            Ft.FT_Close(_handle);
-            _handle = IntPtr.Zero;
-            throw;
-        }
+        _serial = dongle.Serial;
+        _handle = Open(_serial, _settings.DongleBaud);
 
         Info = DeviceInfo.LucidPro($"dongle {dongle.Serial}", "-", CgxStreamParser.AccelRate);
         Status = new DeviceStatus { Connected = false, Message = dongle.Description };
@@ -103,26 +90,64 @@ public sealed class PatchDongleSource : IEegSource, IRawPacketSource
         Log.Info("Dongle open. Switch the patch on if it is off; it connects to the dongle by itself.");
     }
 
+    private static IntPtr Open(string serial, int baud)
+    {
+        Check(Ft.FT_OpenEx(serial, Ft.OpenBySerialNumber, out var h), "open the dongle (is CGX software using it?)");
+        try
+        {
+            Check(Ft.FT_SetBaudRate(h, (uint)baud), "set the baud rate");
+            Check(Ft.FT_SetDataCharacteristics(h, 8, 0, 0), "set 8-N-1");
+            Check(Ft.FT_SetFlowControl(h, Ft.FlowRtsCts, 0x11, 0x13), "set RTS/CTS flow control");
+            Check(Ft.FT_SetLatencyTimer(h, 2), "set the latency timer");
+            Check(Ft.FT_SetTimeouts(h, 100, 100), "set timeouts");
+            Check(Ft.FT_Purge(h, Ft.PurgeRx | Ft.PurgeTx), "clear the buffers");
+            return h;
+        }
+        catch
+        {
+            Ft.FT_Close(h);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Reads until stopped. The patch reconnects to the dongle by itself when it comes back in range; this marks the
+    /// gap and reports it. If the dongle itself fails (unplugged), it is reopened every few seconds until it is back.
+    /// </summary>
     private void ReadLoop()
     {
         var buf = new byte[4096];
         var lastData = Clock.Now;
         var live = false;
+        double? lostAt = null;
         while (!_stop)
         {
-            if (Ft.FT_GetQueueStatus(_handle, out var queued) != 0)
+            if (_handle == IntPtr.Zero || Ft.FT_GetQueueStatus(_handle, out var queued) != 0)
             {
-                Log.Warn("USB dongle stopped responding (unplugged?).");
-                SetConnected(false);
-                break;
+                if (_handle != IntPtr.Zero)
+                {
+                    Log.Warn("USB dongle stopped responding (unplugged?). Reopening it automatically; streaming continues.");
+                    Ft.FT_Close(_handle);
+                    _handle = IntPtr.Zero;
+                    if (live) _parser.NoteLinkLost();
+                    live = false;
+                    lostAt ??= Clock.Now;
+                    SetConnected(false);
+                }
+                Thread.Sleep(2000);
+                try { _handle = Open(_serial, _settings.DongleBaud); Log.Info("USB dongle reopened."); }
+                catch (Exception) { /* still unplugged: try again */ }
+                continue;
             }
             if (queued == 0)
             {
                 if (live && Clock.Now - lastData > StallSeconds)
                 {
                     live = false;
+                    lostAt = lastData;
+                    _parser.NoteLinkLost();
                     SetConnected(false);
-                    Log.Warn("No data from the patch for 3 s. Is it on and within range of the dongle?");
+                    Log.Warn("No data from the patch for 3 s (out of range or off). It reconnects to the dongle by itself; streaming continues.");
                 }
                 Thread.Sleep(2);
                 continue;
@@ -135,7 +160,8 @@ public sealed class PatchDongleSource : IEegSource, IRawPacketSource
             {
                 live = true;
                 SetConnected(true);
-                Log.Info("Patch data arriving through the dongle.");
+                Log.Info(lostAt is double t ? $"Patch is back after {now - t:0} s; streaming resumed." : "Patch data arriving through the dongle.");
+                lostAt = null;
             }
             try { _parser.Feed(buf.AsSpan(0, (int)got), now); }
             catch (Exception ex) { Log.Error($"Patch data handling failed: {ex.Message}"); }

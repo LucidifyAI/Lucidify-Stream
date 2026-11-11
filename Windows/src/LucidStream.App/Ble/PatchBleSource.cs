@@ -16,6 +16,7 @@ namespace LucidStream.App.Ble;
 /// The LucidPro (CGX Patch EEG) over Windows' built-in Bluetooth LE, matching the Lucidify Android app:
 /// find the patch by the CGX service UUID, subscribe to both notify characteristics (...D703 and ...D704), and treat
 /// all notified bytes as one stream. The patch needs no start command. Parsing is in Core (CgxStreamParser).
+/// If the data stops (out of range, patch off) it reconnects by itself until the patch is back.
 /// </summary>
 public sealed class PatchBleSource : IEegSource, IRawPacketSource
 {
@@ -30,6 +31,14 @@ public sealed class PatchBleSource : IEegSource, IRawPacketSource
     private bool _byteSplitLogged;
     private double _connectedAt;
 
+    private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(12);
+    private const double StallSeconds = 3;
+    private ulong _address;
+    private double _lastDataAt;
+    private volatile bool _linkUp;
+    private CancellationTokenSource? _life;
+    private Task? _supervisor;
+
     public PatchBleSource(PatchBleSettings settings)
     {
         _settings = settings;
@@ -39,7 +48,7 @@ public sealed class PatchBleSource : IEegSource, IRawPacketSource
         _parser.Raw += b => RawReceived?.Invoke(b);
         _parser.Status += s =>
         {
-            Status = s with { Connected = _device?.ConnectionStatus == BluetoothConnectionStatus.Connected, Message = _name };
+            Status = s with { Connected = _linkUp, Message = Status.Message };
             StatusChanged?.Invoke(Status);
         };
     }
@@ -60,59 +69,157 @@ public sealed class PatchBleSource : IEegSource, IRawPacketSource
 
     public async Task StartAsync(CancellationToken ct)
     {
-        var (address, name) = await ScanAsync(ct);
+        var (address, name) = await ScanAsync(ct, _settings.ScanSeconds);
+        _address = address;
         _name = name;
         Log.Info($"Found {name}; connecting...");
-
-        _device = await BluetoothLEDevice.FromBluetoothAddressAsync(address)
-                  ?? throw new InvalidOperationException($"Could not open {name}.");
-        _device.ConnectionStatusChanged += OnConnectionChanged;
-        try
-        {
-            _session = await GattSession.FromDeviceIdAsync(_device.BluetoothDeviceId);
-            _session.MaintainConnection = true;
-        }
-        catch (Exception ex) { Log.Warn($"Could not ask Windows to keep the link open: {ex.Message}"); }
-
-        var services = await _device.GetGattServicesForUuidAsync(_settings.ServiceGuid, BluetoothCacheMode.Uncached);
-        if (services.Status != GattCommunicationStatus.Success || services.Services.Count == 0)
-            throw new InvalidOperationException($"{name}: CGX data service not found ({services.Status}). Is the patch connected to another app or the USB dongle?");
-        _service = services.Services[0];
-
-        foreach (var uuid in _settings.DataCharacteristicGuids)
-        {
-            var found = await _service.GetCharacteristicsForUuidAsync(uuid, BluetoothCacheMode.Uncached);
-            if (found.Status != GattCommunicationStatus.Success || found.Characteristics.Count == 0)
-            {
-                Log.Warn($"{name}: characteristic {uuid} not found ({found.Status}).");
-                continue;
-            }
-            var c = found.Characteristics[0];
-            c.ValueChanged += OnValueChanged;
-            _chars.Add(c);
-        }
-        if (_chars.Count == 0) throw new InvalidOperationException($"{name}: no CGX data characteristics found.");
-        await SubscribeAsync();
+        _connectedAt = Clock.Now;
+        await ConnectAsync(ct);
 
         var serial = name.Length > 0 ? name : address.ToString("X12", CultureInfo.InvariantCulture);
         Info = DeviceInfo.LucidPro(serial, "-", CgxStreamParser.AccelRate);
         _connectedAt = Clock.Now;
-        Status = new DeviceStatus { Connected = true, Message = name };
-        StatusChanged?.Invoke(Status);
+        SetConnected(true, name);
         Log.Info($"{name} connected{(_session != null ? $" (max packet {_session.MaxPduSize} bytes)" : "")}; waiting for data.");
+
+        _life = new CancellationTokenSource();
+        var life = _life.Token;
+        _supervisor = Task.Run(() => SuperviseAsync(life));
     }
 
-    private async Task SubscribeAsync()
+    /// <summary>Open the patch at the known address, find the CGX characteristics and subscribe. Cleans up on failure.</summary>
+    private async Task ConnectAsync(CancellationToken ct)
     {
-        foreach (var c in _chars)
+        try
         {
-            var r = await c.WriteClientCharacteristicConfigurationDescriptorAsync(GattClientCharacteristicConfigurationDescriptorValue.Notify);
-            if (r != GattCommunicationStatus.Success)
-                throw new InvalidOperationException($"{_name}: could not subscribe to {c.Uuid} ({r}).");
+            _device = await WithTimeout(BluetoothLEDevice.FromBluetoothAddressAsync(_address).AsTask(), ConnectTimeout, ct)
+                      ?? throw new InvalidOperationException($"Could not open {_name}.");
+            _device.ConnectionStatusChanged += OnConnectionChanged;
+            try
+            {
+                _session = await WithTimeout(GattSession.FromDeviceIdAsync(_device.BluetoothDeviceId).AsTask(), ConnectTimeout, ct);
+                _session.MaintainConnection = true;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { Log.Warn($"Could not ask Windows to keep the link open: {ex.Message}"); }
+
+            var services = await WithTimeout(_device.GetGattServicesForUuidAsync(_settings.ServiceGuid, BluetoothCacheMode.Uncached).AsTask(), ConnectTimeout, ct);
+            if (services.Status != GattCommunicationStatus.Success || services.Services.Count == 0)
+                throw new InvalidOperationException($"{_name}: CGX data service not found ({services.Status}). Is the patch connected to another app or the USB dongle?");
+            _service = services.Services[0];
+
+            foreach (var uuid in _settings.DataCharacteristicGuids)
+            {
+                var found = await WithTimeout(_service.GetCharacteristicsForUuidAsync(uuid, BluetoothCacheMode.Uncached).AsTask(), ConnectTimeout, ct);
+                if (found.Status != GattCommunicationStatus.Success || found.Characteristics.Count == 0)
+                {
+                    Log.Warn($"{_name}: characteristic {uuid} not found ({found.Status}).");
+                    continue;
+                }
+                var c = found.Characteristics[0];
+                c.ValueChanged += OnValueChanged;
+                _chars.Add(c);
+            }
+            if (_chars.Count == 0) throw new InvalidOperationException($"{_name}: no CGX data characteristics found.");
+
+            foreach (var c in _chars)
+            {
+                var r = await WithTimeout(c.WriteClientCharacteristicConfigurationDescriptorAsync(GattClientCharacteristicConfigurationDescriptorValue.Notify).AsTask(), ConnectTimeout, ct);
+                if (r != GattCommunicationStatus.Success)
+                    throw new InvalidOperationException($"{_name}: could not subscribe to {c.Uuid} ({r}).");
+            }
+            Interlocked.Exchange(ref _lastDataAt, Clock.Now);
+        }
+        catch
+        {
+            TearDown();
+            throw;
         }
     }
 
-    private async Task<(ulong Address, string Name)> ScanAsync(CancellationToken ct)
+    /// <summary>
+    /// Watches the data. When the patch goes quiet (out of range, switched off, Windows dropped the link) it reconnects
+    /// on its own and keeps trying until the patch is back or the user disconnects; streaming carries on throughout and
+    /// the missing stretch is marked as a gap.
+    /// </summary>
+    private async Task SuperviseAsync(CancellationToken life)
+    {
+        try
+        {
+            while (!life.IsCancellationRequested)
+            {
+                await Task.Delay(1000, life);
+                var silent = Clock.Now - Interlocked.CompareExchange(ref _lastDataAt, 0, 0);
+                if (silent < StallSeconds) continue;
+
+                var lostAt = Clock.Now;
+                _parser.NoteLinkLost();
+                SetConnected(false, $"{_name}: out of range or off, reconnecting...");
+                Log.Warn($"No data from {_name} for {silent:0} s (out of range or switched off). Reconnecting automatically; streaming continues.");
+
+                for (var attempt = 1; !life.IsCancellationRequested; attempt++)
+                {
+                    TearDown();
+                    try
+                    {
+                        // Every few tries, look for the patch again in case it now advertises under a new address.
+                        if (attempt % 5 == 0)
+                        {
+                            var (address, _) = await ScanAsync(life, 6, quiet: true);
+                            _address = address;
+                        }
+                        var tryStarted = Clock.Now;
+                        await ConnectAsync(life);
+                        // Connected: wait for the first data to call it recovered.
+                        while (Interlocked.CompareExchange(ref _lastDataAt, 0, 0) <= tryStarted + 0.0001 && Clock.Now - tryStarted < 6)
+                            await Task.Delay(200, life);
+                        if (Clock.Now - tryStarted >= 6 && Interlocked.CompareExchange(ref _lastDataAt, 0, 0) <= tryStarted + 0.0001)
+                            throw new TimeoutException("connected but no data yet");
+                        SetConnected(true, _name);
+                        Log.Info($"{_name} is back after {Clock.Now - lostAt:0} s; streaming resumed.");
+                        break;
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        if (attempt == 1 || attempt % 10 == 0)
+                            Log.Info($"Still reconnecting to {_name} ({Clock.Now - lostAt:0} s, {ex.Message}).");
+                        await Task.Delay(TimeSpan.FromSeconds(Math.Min(2 * attempt, 5)), life);
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { Log.Error($"Bluetooth reconnect stopped: {ex.Message}"); }
+    }
+
+    private void TearDown()
+    {
+        foreach (var c in _chars) c.ValueChanged -= OnValueChanged;
+        _chars.Clear();
+        if (_device != null) _device.ConnectionStatusChanged -= OnConnectionChanged;
+        try { _service?.Dispose(); } catch { /* already gone */ }
+        try { _session?.Dispose(); } catch { /* already gone */ }
+        try { _device?.Dispose(); } catch { /* already gone */ }
+        _service = null;
+        _session = null;
+        _device = null;
+    }
+
+    private void SetConnected(bool connected, string message)
+    {
+        _linkUp = connected;
+        Status = Status with { Connected = connected, Message = message };
+        StatusChanged?.Invoke(Status);
+    }
+
+    private static async Task<T> WithTimeout<T>(Task<T> op, TimeSpan timeout, CancellationToken ct)
+    {
+        var done = await Task.WhenAny(op, Task.Delay(timeout, ct));
+        ct.ThrowIfCancellationRequested();
+        if (done != op) throw new TimeoutException("the patch did not answer");
+        return await op;
+    }
+
+    private async Task<(ulong Address, string Name)> ScanAsync(CancellationToken ct, int seconds, bool quiet = false)
     {
         var service = _settings.ServiceGuid;
         var found = new TaskCompletionSource<(ulong, string)>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -130,11 +237,11 @@ public sealed class PatchBleSource : IEegSource, IRawPacketSource
                 if (byService || byName) found.TrySetResult((e.BluetoothAddress, known ?? ""));
             }
         };
-        Log.Info($"Scanning for a LucidPro patch (up to {_settings.ScanSeconds} s). Switch the patch on.");
+        if (!quiet) Log.Info($"Scanning for a LucidPro patch (up to {seconds} s). Switch the patch on.");
         watcher.Start();
         try
         {
-            var done = await Task.WhenAny(found.Task, Task.Delay(TimeSpan.FromSeconds(_settings.ScanSeconds), ct));
+            var done = await Task.WhenAny(found.Task, Task.Delay(TimeSpan.FromSeconds(seconds), ct));
             if (done != found.Task)
                 throw new TimeoutException("No LucidPro patch found. Check it is on and charged, and not connected to the Android app or the CGX USB dongle.");
             var (address, firstName) = await found.Task;
@@ -150,6 +257,7 @@ public sealed class PatchBleSource : IEegSource, IRawPacketSource
     private void OnValueChanged(GattCharacteristic sender, GattValueChangedEventArgs args)
     {
         var receivedAt = Clock.Now;
+        Interlocked.Exchange(ref _lastDataAt, receivedAt);
         var reader = DataReader.FromBuffer(args.CharacteristicValue);
         var bytes = new byte[reader.UnconsumedBufferLength];
         reader.ReadBytes(bytes);
@@ -175,40 +283,31 @@ public sealed class PatchBleSource : IEegSource, IRawPacketSource
         }
     }
 
-    private async void OnConnectionChanged(BluetoothLEDevice sender, object args)
+    private void OnConnectionChanged(BluetoothLEDevice sender, object args)
     {
-        var connected = sender.ConnectionStatus == BluetoothConnectionStatus.Connected;
-        Status = Status with { Connected = connected };
-        StatusChanged?.Invoke(Status);
-        if (!connected)
-        {
-            _parser.NoteLinkLost();
-            Log.Warn("Patch disconnected; reconnecting when it is back in range.");
-            return;
-        }
-        Log.Info("Patch reconnected; resubscribing.");
-        try { await SubscribeAsync(); }
-        catch (Exception ex) { Log.Warn($"Resubscribe failed: {ex.Message}"); }
+        // The supervisor notices the missing data and reconnects; this only reports the link state promptly.
+        if (sender.ConnectionStatus == BluetoothConnectionStatus.Disconnected && _linkUp)
+            Log.Info($"{_name}: Bluetooth link dropped.");
     }
 
     public async Task StopAsync()
     {
+        _life?.Cancel();
+        if (_supervisor != null)
+        {
+            try { await _supervisor; }
+            catch { /* logged inside */ }
+        }
+        _supervisor = null;
+        _life?.Dispose();
+        _life = null;
         foreach (var c in _chars)
         {
-            c.ValueChanged -= OnValueChanged;
-            try { await c.WriteClientCharacteristicConfigurationDescriptorAsync(GattClientCharacteristicConfigurationDescriptorValue.None); }
+            try { await WithTimeout(c.WriteClientCharacteristicConfigurationDescriptorAsync(GattClientCharacteristicConfigurationDescriptorValue.None).AsTask(), TimeSpan.FromSeconds(3), CancellationToken.None); }
             catch (Exception ex) { Log.Warn($"Bluetooth stop: {ex.Message}"); }
         }
-        _chars.Clear();
-        if (_device != null) _device.ConnectionStatusChanged -= OnConnectionChanged;
-        _service?.Dispose();
-        _session?.Dispose();
-        _device?.Dispose();
-        _service = null;
-        _session = null;
-        _device = null;
-        Status = Status with { Connected = false };
-        StatusChanged?.Invoke(Status);
+        TearDown();
+        SetConnected(false, _name);
     }
 
     public async ValueTask DisposeAsync() => await StopAsync();

@@ -58,7 +58,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private readonly float[] _traceFp1 = new float[TraceSamples], _traceFp2 = new float[TraceSamples];
     private int _tracePos;
     private float[]? _latestBands;
-    private const int TraceSamples = 2000; // 4 s at 500 Hz
+    private const int TraceSamples = 5000; // 10 s at 500 Hz, for the Cloud window's local trace
+
+    /// <summary>The live signal for the main window's waveform and spectrogram.</summary>
+    public LucidStream.App.Live.LiveSignal Live { get; } = new();
 
     public AppSettings Settings => _engine.Settings;
 
@@ -129,6 +132,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public bool IsStreaming => _engine.State == EngineState.Streaming;
     public bool IsNotStreaming => !IsStreaming;
     public bool IsDisconnected => _engine.State == EngineState.Disconnected;
+    public bool IsLinked => !IsDisconnected;
     public bool IsReplayActive => _engine.Source?.IsReplay == true;
 
     private string _deviceName = "-", _firmware = "-", _battery = "-", _fp1 = "-", _fp2 = "-";
@@ -137,6 +141,18 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public string Battery { get => _battery; private set => Set(ref _battery, value); }
     public string Fp1Contact { get => _fp1; private set => Set(ref _fp1, value); }
     public string Fp2Contact { get => _fp2; private set => Set(ref _fp2, value); }
+
+    // Compact header status (icons): link "up" / "lost" / "off", battery voltage, contact "good" / "poor" / "none".
+    private string _linkState = "off", _linkText = "Not connected", _batteryVolts = "", _batteryGlyph = "\uE850",
+        _contactAfz = "none", _contactFp2 = "none";
+    public string LinkState { get => _linkState; private set => Set(ref _linkState, value); }
+    public string LinkText { get => _linkText; private set => Set(ref _linkText, value); }
+    public string LinkTooltip => IsDisconnected ? "No patch connected" : $"{DeviceName}: {LinkText}";
+    public string BatteryVolts { get => _batteryVolts; private set => Set(ref _batteryVolts, value); }
+    public string BatteryGlyph { get => _batteryGlyph; private set => Set(ref _batteryGlyph, value); }
+    public string ContactAfz { get => _contactAfz; private set => Set(ref _contactAfz, value); }
+    public string ContactFp2 { get => _contactFp2; private set => Set(ref _contactFp2, value); }
+    public string ContactTooltip => $"AFz: {Fp1Contact}\nFp2: {Fp2Contact}";
 
     // Outputs
     public bool LslAvailable => LslNative.IsAvailable;
@@ -304,6 +320,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                     _tracePos = (_tracePos + 1) % TraceSamples;
                 }
             }
+            Live.AddFiltered(f.Index, f.Data, f.SampleCount);
+        }
+        else if (f.Def.Key == StreamKeys.EegRaw && f.Data != null)
+        {
+            Live.AddRaw(f.Index, f.Data, f.SampleCount);
         }
         else if (f.Def.Key == StreamKeys.BandPower && f.Data != null)
         {
@@ -311,9 +332,25 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    /// <summary>Called by the window about 15 times a second on the UI thread.</summary>
     /// <summary>Lucidify Cloud: sign-in, patient, recording and delay.</summary>
     public CloudViewModel Cloud { get; }
+
+    /// <summary>Streaming (re)started: clear the live views.</summary>
+    public event Action? LiveViewReset;
+
+    private void ResetLiveView()
+    {
+        lock (_traceGate)
+        {
+            Array.Fill(_traceFp1, float.NaN);
+            Array.Fill(_traceFp2, float.NaN);
+            _tracePos = 0;
+        }
+        Live.Reset();
+        LiveViewReset?.Invoke();
+    }
+
+    /// <summary>Called by the window about 15 times a second on the UI thread.</summary>
 
     public void Tick()
     {
@@ -365,6 +402,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             DeviceName = Firmware = Battery = Fp1Contact = Fp2Contact = "-";
             StatusLine = "";
+            LinkState = "off";
+            BatteryVolts = "";
+            BatteryGlyph = "\uE850";
+            ContactAfz = ContactFp2 = "none";
         }
         else if (_engine.Source?.Info is { } info)
         {
@@ -372,6 +413,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             Firmware = info.Firmware;
             ApplyStatus(_engine.DeviceStatus);
         }
+        if (IsStreaming && !_wasStreaming) ResetLiveView();
+        _wasStreaming = IsStreaming;
         if (!IsStreaming)
         {
             PairingCode = "";
@@ -381,6 +424,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(IsStreaming));
         OnPropertyChanged(nameof(IsNotStreaming));
         OnPropertyChanged(nameof(IsDisconnected));
+        OnPropertyChanged(nameof(IsLinked));
+        UpdateLinkText();
+        OnPropertyChanged(nameof(LinkTooltip));
         OnPropertyChanged(nameof(IsReplayActive));
         RefreshClients();
         RaiseAll();
@@ -388,10 +434,52 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void ApplyStatus(DeviceStatus s)
     {
-        Battery = s.BatteryPercent is int b ? (s.BatteryVolts is double v ? $"{b}% ({v:0.00} V)" : $"{b}%") : "-";
+        // While the patch is out of range, say so in the header; streaming carries on and resumes by itself.
+        var lost = !s.Connected && _engine.State is EngineState.Connected or EngineState.Streaming && !IsReplayActive;
+        if (lost) StateText = _engine.State == EngineState.Streaming ? "Streaming - patch out of range, reconnecting" : "Waiting for the patch";
+        if (lost != _patchLost)
+        {
+            _patchLost = lost;
+            if (!lost) OnStateChanged();
+        }
+        Battery = s.BatteryPercent is int b ? (s.BatteryVolts is double v ? $"Battery {b}% ({v:0.00} V)" : $"Battery {b}%") : "Battery: not reported yet";
         Fp1Contact = Contact(s, 0);
         Fp2Contact = Contact(s, 1);
+
+        if (_engine.State is EngineState.Connected or EngineState.Streaming)
+            LinkState = s.Connected || IsReplayActive ? "up" : "lost";
+        UpdateLinkText();
+        BatteryVolts = s.Connected && s.BatteryVolts is double volts ? $"{volts:0.00} V" : s.Connected && s.BatteryPercent is int pct ? $"{pct}%" : "";
+        // Segoe MDL2 Battery0..Battery9 are U+E850..U+E859, Battery10 is U+E83F.
+        var level = s.BatteryPercent is int p2 ? (int)Math.Round(Math.Clamp(p2, 0, 100) / 10.0) : 0;
+        BatteryGlyph = level >= 10 ? "\uE83F" : ((char)(0xE850 + level)).ToString();
+        ContactAfz = ContactState(s, 0);
+        ContactFp2 = ContactState(s, 1);
+        OnPropertyChanged(nameof(ContactTooltip));
+        OnPropertyChanged(nameof(LinkTooltip));
     }
+
+    /// <summary>The one status shown in the header, next to the Bluetooth icon.</summary>
+    private void UpdateLinkText()
+    {
+        LinkText = _engine.State switch
+        {
+            EngineState.Disconnected => "Not connected",
+            EngineState.Connecting => "Connecting...",
+            EngineState.Connected when LinkState == "lost" => "Waiting for the patch",
+            EngineState.Connected => IsReplayActive ? "Replay ready" : "Connected",
+            EngineState.Streaming when LinkState == "lost" => "Out of range, reconnecting",
+            EngineState.Streaming => IsReplayActive ? "Streaming (replay)" : "Streaming",
+            _ => ""
+        };
+    }
+
+    private static string ContactState(DeviceStatus s, int ch) =>
+        !s.Connected ? "none" : ch < s.Contact.Length && s.Contact[ch] ? "good" : "poor";
+
+    private bool _wasStreaming;
+
+    private bool _patchLost;
 
     private static string Contact(DeviceStatus s, int ch)
     {
