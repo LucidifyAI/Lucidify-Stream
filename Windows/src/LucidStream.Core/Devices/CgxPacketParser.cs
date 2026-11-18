@@ -51,6 +51,17 @@ public sealed record PatchBleSettings
     /// <summary>How long to scan for a patch before giving up.</summary>
     public int ScanSeconds { get; init; } = 15;
 
+    /// <summary>
+    /// Accelerometer output rate in Hz. 500 (the default) streams every patch sample, one per EEG sample.
+    /// Lower rates average consecutive samples: 50 = mean of 10. The rate used is 500 / N for a whole number N.
+    /// </summary>
+    public double AccelRateHz { get; init; } = 500;
+
+    /// <summary>Patch samples averaged into each accelerometer sample, from <see cref="AccelRateHz"/>.</summary>
+    public int AccelDecimation => Math.Clamp(
+        (int)Math.Round(CgxPatchFormat.SampleRate / (AccelRateHz > 0 ? AccelRateHz : CgxPatchFormat.SampleRate)),
+        1, (int)CgxPatchFormat.SampleRate);
+
     public Guid ServiceGuid => Guid.Parse(string.IsNullOrWhiteSpace(DataServiceUuid) ? DefaultServiceUuid : DataServiceUuid);
 
     public Guid[] DataCharacteristicGuids => string.IsNullOrWhiteSpace(DataCharacteristicUuid)
@@ -169,13 +180,23 @@ public sealed record CgxRawBlock(byte[] Packets, long FirstSampleIndex, double R
 /// - Lost packets: from the 7-bit counter. The patch buffers internally and catches up after short link stalls, so
 ///   arrival time is only used to size a gap after the source reports the link was lost (<see cref="NoteLinkLost"/>).
 /// - EEG: AFz and Fp2 in microvolts at 500 Hz, DC-coupled as delivered.
-/// - Accelerometer: averaged to 50 Hz.
+/// - Accelerometer: every sample (500 Hz) or averaged to a lower rate, as set in <see cref="PatchBleSettings.AccelRateHz"/>.
+/// - Impedance (kOhm) and DC offset (mV) per channel: averaged to 10 Hz.
 /// - Status once per second: battery, SD card, impedance per channel (kOhm), contact (DC offset within +/-300 mV).
+/// Accelerometer and impedance blocks are timestamped the same way as the EEG.
 /// </summary>
 public sealed class CgxStreamParser
 {
+    /// <summary>Accelerometer decimation when the caller gives none (50 Hz). The app passes <see cref="PatchBleSettings.AccelDecimation"/>.</summary>
     public const int AccelDecimation = 10;
+
+    /// <summary>Accelerometer rate with the default decimation. A parser's actual rate is <see cref="AccelRateHz"/>.</summary>
     public const double AccelRate = CgxPatchFormat.SampleRate / AccelDecimation;
+
+    /// <summary>Impedance and DC offset are averaged over this many packets: 50 packets = 10 Hz.</summary>
+    public const int ImpedanceEveryPackets = 50;
+    public const double ImpedanceRate = CgxPatchFormat.SampleRate / ImpedanceEveryPackets;
+
     private const int StatusEveryPackets = 500;
     private const int CheckAfterPackets = 1000;
     private const double OutageSeconds = 0.5;
@@ -203,7 +224,20 @@ public sealed class CgxStreamParser
     private int _checkCount;
     private int _impFlag = -1;
 
-    public CgxStreamParser(CgxPacking packing = CgxPacking.Cgx7Bit) => _packing = packing;
+    private readonly double[] _impWin = new double[4];
+    private int _impWinCount;
+
+    public CgxStreamParser(CgxPacking packing = CgxPacking.Cgx7Bit, int accelDecimation = AccelDecimation)
+    {
+        _packing = packing;
+        AccelSamplesAveraged = Math.Clamp(accelDecimation, 1, (int)CgxPatchFormat.SampleRate);
+    }
+
+    /// <summary>Patch samples averaged into each accelerometer output sample (1 = every sample, 500 Hz).</summary>
+    public int AccelSamplesAveraged { get; }
+
+    /// <summary>This parser's accelerometer output rate in Hz.</summary>
+    public double AccelRateHz => CgxPatchFormat.SampleRate / AccelSamplesAveraged;
 
     public CgxPacking Packing => _packing;
     public long PacketsDecoded { get; private set; }
@@ -213,6 +247,9 @@ public sealed class CgxStreamParser
 
     public event Action<EegBlock>? Eeg;
     public event Action<AccelBlock>? Accel;
+
+    /// <summary>Impedance (kOhm) then DC offset (mV) per channel, 4 values per row, 10 rows per second.</summary>
+    public event Action<ImpedanceBlock>? Impedance;
     public event Action<DeviceStatus>? Status;
     public event Action<CgxRawBlock>? Raw;
 
@@ -234,12 +271,13 @@ public sealed class CgxStreamParser
     public void Feed(ReadOnlySpan<byte> bytes, double receivedAt)
     {
         List<Group>? groups = null;
-        List<float>? acc = null;
+        List<SideBlock>? accBlocks = null, impBlocks = null;
+        SideBlock? acc = null, imp = null;
         DeviceStatus? status = null;
+        var total = 0;
         lock (_gate)
         {
             Append(bytes);
-            var total = 0;
             Group? current = null;
             while (TryTakePacket(out var start))
             {
@@ -252,7 +290,11 @@ public sealed class CgxStreamParser
                     _nextIndex += missing;
                     _accCount = 0;
                     Array.Clear(_accSum);
+                    _impWinCount = 0;
+                    Array.Clear(_impWin);
                     current = null;
+                    acc = null;
+                    imp = null;
                 }
                 if (current == null)
                 {
@@ -260,12 +302,22 @@ public sealed class CgxStreamParser
                     (groups ??= new List<Group>()).Add(current);
                 }
                 current.Add(pkt, p);
+                var ordinal = total;
                 total++;
                 _nextIndex++;
                 PacketsDecoded++;
                 OddPayloadBytes += pkt.OddPayloadBytes;
 
-                if (AddAccel(pkt) is { } a) (acc ??= new List<float>()).AddRange(a);
+                if (AddAccel(pkt) is { } a)
+                {
+                    if (acc == null) { acc = new SideBlock(); (accBlocks ??= new List<SideBlock>()).Add(acc); }
+                    acc.Add(a, ordinal);
+                }
+                if (AddImpedance(pkt) is { } z)
+                {
+                    if (imp == null) { imp = new SideBlock(); (impBlocks ??= new List<SideBlock>()).Add(imp); }
+                    imp.Add(z, ordinal);
+                }
                 status = AddStatus(pkt) ?? status;
                 RunChecks(pkt);
             }
@@ -281,7 +333,14 @@ public sealed class CgxStreamParser
                 Raw?.Invoke(new CgxRawBlock(g.Raw.ToArray(), g.FirstIndex, at));
             }
         }
-        if (acc != null) Accel?.Invoke(new AccelBlock(acc.ToArray(), receivedAt));
+        // Stamped like the EEG: the newest value at the arrival time, less the packets that arrived after it.
+        // A new block starts after lost packets, so the timestamps jump over the loss as the EEG does.
+        if (accBlocks != null)
+            foreach (var b in accBlocks)
+                Accel?.Invoke(new AccelBlock(b.Values.ToArray(), receivedAt - (total - 1 - b.LastOrdinal) / CgxPatchFormat.SampleRate));
+        if (impBlocks != null)
+            foreach (var b in impBlocks)
+                Impedance?.Invoke(new ImpedanceBlock(b.Values.ToArray(), 4, receivedAt - (total - 1 - b.LastOrdinal) / CgxPatchFormat.SampleRate));
         if (status != null) Status?.Invoke(status);
     }
 
@@ -359,10 +418,30 @@ public sealed class CgxStreamParser
         _accSum[1] += p.AccY;
         _accSum[2] += p.AccZ;
         _accCount++;
-        if (_accCount < AccelDecimation) return null;
+        if (_accCount < AccelSamplesAveraged) return null;
         var r = new[] { (float)(_accSum[0] / _accCount), (float)(_accSum[1] / _accCount), (float)(_accSum[2] / _accCount) };
         _accCount = 0;
         Array.Clear(_accSum);
+        return r;
+    }
+
+    /// <summary>Impedance (kOhm) and DC offset (mV) per channel, averaged over <see cref="ImpedanceEveryPackets"/> packets.</summary>
+    private float[]? AddImpedance(in CgxPacket p)
+    {
+        _impWin[0] += p.ImpedanceAfzOhm;
+        _impWin[1] += p.ImpedanceFp2Ohm;
+        _impWin[2] += p.AfzUv;
+        _impWin[3] += p.Fp2Uv;
+        _impWinCount++;
+        if (_impWinCount < ImpedanceEveryPackets) return null;
+        var n = (double)_impWinCount;
+        var r = new[]
+        {
+            (float)(_impWin[0] / n / 1000.0), (float)(_impWin[1] / n / 1000.0),
+            (float)(_impWin[2] / n / 1000.0), (float)(_impWin[3] / n / 1000.0)
+        };
+        _impWinCount = 0;
+        Array.Clear(_impWin);
         return r;
     }
 
@@ -427,6 +506,19 @@ public sealed class CgxStreamParser
         Log.Info($"Accelerometer magnitude {_checkAccMag / _checkCount:0.000} g (about 1 g when the patch is still); " +
                  $"mean X {_checkAx / _checkCount:0.000}, Y {_checkAy / _checkCount:0.000}, Z {_checkAz / _checkCount:0.000} g.");
         if (BytesDiscarded > 0) Log.Info($"Resynchronized on the byte stream; {BytesDiscarded:N0} bytes skipped so far.");
+    }
+
+    /// <summary>Accelerometer or impedance values from one run of packets without loss.</summary>
+    private sealed class SideBlock
+    {
+        public List<float> Values { get; } = new();
+        public int LastOrdinal { get; private set; } = -1;
+
+        public void Add(float[] values, int ordinal)
+        {
+            Values.AddRange(values);
+            LastOrdinal = ordinal;
+        }
     }
 
     private sealed class Group

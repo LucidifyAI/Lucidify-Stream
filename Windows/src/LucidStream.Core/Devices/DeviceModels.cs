@@ -18,6 +18,9 @@ public sealed record DeviceInfo(
         new("LucidPro", serial, firmware, 500, accelRate, new[] { "AFz", "Fp2" }, PatchReference);
 
     public const string PatchReference = "patch reference electrode (site not specified by CGX)";
+
+    /// <summary>Rate of the impedance stream (impedance and DC offset per channel), 10 Hz on the patch.</summary>
+    public double ImpedanceRate { get; init; } = CgxStreamParser.ImpedanceRate;
 }
 
 /// <summary>
@@ -36,6 +39,16 @@ public sealed record EegBlock(float[] Samples, int Channels, double ReceivedAt, 
 public sealed record AccelBlock(float[] Samples, double ReceivedAt)
 {
     public int SampleCount => Samples.Length / 3;
+}
+
+/// <summary>
+/// A block of impedance rows. Each row holds the impedance of every EEG channel in kOhm, then the DC offset of every
+/// EEG channel in mV: AFz_impedance, Fp2_impedance, AFz_dc_offset, Fp2_dc_offset for the patch.
+/// </summary>
+/// <param name="ReceivedAt">LSL clock time of the newest row, before the BLE latency correction.</param>
+public sealed record ImpedanceBlock(float[] Samples, int Channels, double ReceivedAt)
+{
+    public int SampleCount => Samples.Length / Channels;
 }
 
 /// <summary>Live device state reported by the source. Values are null when the device does not report them.</summary>

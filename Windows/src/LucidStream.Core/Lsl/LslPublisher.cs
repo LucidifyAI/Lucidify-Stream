@@ -91,7 +91,7 @@ public sealed class LslPublisher : IStreamSink, IDisposable
             var ch = LslNative.lsl_append_child(channels, "channel");
             Child(ch, "label", label);
             Child(ch, "unit", ChannelUnit(def, label));
-            Child(ch, "type", ChannelType(def));
+            Child(ch, "type", ChannelType(def, label));
         }
 
         if (def.Key is StreamKeys.EegRaw or StreamKeys.EegFiltered)
@@ -115,6 +115,22 @@ public sealed class LslPublisher : IStreamSink, IDisposable
         {
             Child(desc, "method", "impedance from device; quality index is a heuristic (flatline, saturation, line noise, amplitude, gaps, impedance)");
         }
+        if (def.Key == StreamKeys.Acc && def.Rate > 0)
+        {
+            var m = LslNative.lsl_append_child(desc, "method");
+            var averaged = (int)Math.Round(device.EegRate / def.Rate);
+            Child(m, "description", averaged <= 1
+                ? "every accelerometer sample from the patch, one per EEG sample"
+                : $"mean of {averaged} consecutive accelerometer samples from the patch");
+            Child(m, "conversion", "g = count x 6.4e-5 (CGX)");
+        }
+        if (def.Key == StreamKeys.Impedance && def.Rate > 0)
+        {
+            var m = LslNative.lsl_append_child(desc, "method");
+            Child(m, "description", $"impedance demodulated in the patch firmware, and the DC offset of each EEG channel; each sample is the mean over the {1.0 / def.Rate:0.###} s before it");
+            Child(m, "impedance_conversion", "ohms = count x 27.388 - 28922 (CGX, Bluetooth stream)");
+            Child(m, "contact_guideline", "CGX recommends treating a channel as bad when its DC offset is beyond +/-300 mV, even if its impedance looks low");
+        }
         if (replay != null)
         {
             var r = LslNative.lsl_append_child(desc, "replay");
@@ -132,14 +148,16 @@ public sealed class LslPublisher : IStreamSink, IDisposable
     {
         StreamKeys.BandPower => label.EndsWith("_abs") ? "microvolts^2" : "fraction",
         StreamKeys.Quality => label.EndsWith("_impedance") ? "kiloohms" : "index",
+        StreamKeys.Impedance => label.EndsWith("_impedance") ? "kiloohms" : "millivolts",
         StreamKeys.EegRaw or StreamKeys.EegFiltered => "microvolts",
         _ => def.Unit
     };
 
-    private static string ChannelType(StreamDef def) => def.Key switch
+    private static string ChannelType(StreamDef def, string label) => def.Key switch
     {
         StreamKeys.EegRaw or StreamKeys.EegFiltered => "EEG",
         StreamKeys.Acc => "ACC",
+        StreamKeys.Impedance => label.EndsWith("_impedance") ? "Impedance" : "DCOffset",
         _ => "MISC"
     };
 

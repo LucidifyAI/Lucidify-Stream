@@ -32,6 +32,8 @@ public partial class MainWindow : Window
         _vm = new MainViewModel(settings, AppContext.BaseDirectory, $"Lucid-Stream {typeof(MainWindow).Assembly.GetName().Version} (Windows)",
             s => new PatchSource(s.Ble));
         Sweep.Signal = _vm.Live;
+        _vm.AccelUpdated += (x, y, z) => Gimbal.SetGravity(x, y, z);
+        _vm.AccelCleared += () => Gimbal.Clear();
         SpecAfz.Computer = _spectrogram;
         SpecFp2.Computer = _spectrogram;
         SpecAfz.LabelBrush = new SolidColorBrush(Color.FromRgb(0x38, 0xC6, 0xD6));
@@ -70,6 +72,20 @@ public partial class MainWindow : Window
         var icon = Branding.CreateWindowIcon();
         if (icon != null) Icon = icon;
         SourceInitialized += (_, _) => Branding.ApplyDarkTitleBar(this);
+    }
+
+    /// <summary>Orientation view: take the current pose as upright.</summary>
+    private void SetUpright_Click(object sender, RoutedEventArgs e)
+    {
+        var g = Gimbal.SetUprightFromCurrent();
+        if (g.HasValue) _vm.NoteOrientationReference(g.Value.X, g.Value.Y, g.Value.Z);
+    }
+
+    /// <summary>Orientation view: back to the default upright (Y down, Z out of the forehead).</summary>
+    private void ResetUpright_Click(object sender, RoutedEventArgs e)
+    {
+        Gimbal.ResetReference();
+        Log.Info("Orientation reference reset to the default (Y down, Z out of the forehead).");
     }
 
     // ------------------------------------------------------------------ lifetime: the app runs only while its window is open

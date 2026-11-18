@@ -8,16 +8,19 @@ namespace LucidStream.Core.Devices;
 /// a 3-axis accelerometer, impedance and battery. The signal alternates 30 s "eyes open" and "eyes closed"
 /// blocks (alpha rises when closed) and adds blinks, so a sonification page has something to react to.
 /// </summary>
-public sealed class SimulatedSource : IEegSource
+public sealed class SimulatedSource : IEegSource, IImpedanceSource
 {
     public const double EegRate = 500;
     public const double AccelRateHz = 25;
+    public const double ImpedanceRateHz = 10;
     private const int SamplesPerPacket = 10;
 
     private readonly double _packetLossProbability;
     private readonly Random _rng;
     private CancellationTokenSource? _cts;
     private Thread? _thread;
+
+    public event Action<ImpedanceBlock>? ImpedanceReceived;
 
     public SimulatedSource(double packetLossProbability = 0, int seed = 1234)
     {
@@ -72,6 +75,7 @@ public sealed class SimulatedSource : IEegSource
         var sw = Stopwatch.StartNew();
         long generated = 0;
         long accelGenerated = 0;
+        long impedanceGenerated = 0;
         var gen = new SignalGenerator(_rng);
         var lastStatus = 0.0;
 
@@ -107,6 +111,22 @@ public sealed class SimulatedSource : IEegSource
                 }
                 accelGenerated = accDue;
                 AccelReceived?.Invoke(new AccelBlock(acc, Clock.Now));
+            }
+
+            var impDue = (long)(elapsed * ImpedanceRateHz);
+            if (impDue > impedanceGenerated)
+            {
+                var n = (int)(impDue - impedanceGenerated);
+                var imp = new float[n * 4];
+                for (var i = 0; i < n; i++)
+                {
+                    imp[i * 4] = (float)(9.5 + 0.4 * (_rng.NextDouble() - 0.5));      // AFz kOhm
+                    imp[i * 4 + 1] = (float)(11.2 + 0.4 * (_rng.NextDouble() - 0.5)); // Fp2 kOhm
+                    imp[i * 4 + 2] = (float)(12.0 + 0.5 * (_rng.NextDouble() - 0.5)); // AFz DC offset mV
+                    imp[i * 4 + 3] = (float)(-8.0 + 0.5 * (_rng.NextDouble() - 0.5)); // Fp2 DC offset mV
+                }
+                impedanceGenerated = impDue;
+                ImpedanceReceived?.Invoke(new ImpedanceBlock(imp, 4, Clock.Now));
             }
 
             if (elapsed - lastStatus >= 30)

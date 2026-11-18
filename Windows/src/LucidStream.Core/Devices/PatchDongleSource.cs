@@ -10,7 +10,7 @@ namespace LucidStream.Core.Devices;
 /// D2XX driver (ftd2xx.dll, installed with the FTDI driver Windows loads for the dongle), as CGX's own software does.
 /// The bytes are the same packets as over Bluetooth and go through the same <see cref="CgxStreamParser"/>.
 /// </summary>
-public sealed class PatchDongleSource : IEegSource, IRawPacketSource
+public sealed class PatchDongleSource : IEegSource, IRawPacketSource, IImpedanceSource
 {
     private const double StallSeconds = 3;
 
@@ -21,12 +21,15 @@ public sealed class PatchDongleSource : IEegSource, IRawPacketSource
     private Thread? _reader;
     private volatile bool _stop;
 
+    public event Action<ImpedanceBlock>? ImpedanceReceived;
+
     public PatchDongleSource(PatchBleSettings settings)
     {
         _settings = settings;
-        _parser = new CgxStreamParser(settings.PackingMode);
+        _parser = new CgxStreamParser(settings.PackingMode, settings.AccelDecimation);
         _parser.Eeg += b => EegReceived?.Invoke(b);
         _parser.Accel += b => AccelReceived?.Invoke(b);
+        _parser.Impedance += b => ImpedanceReceived?.Invoke(b);
         _parser.Raw += b => RawReceived?.Invoke(b);
         _parser.Status += s =>
         {
@@ -81,7 +84,8 @@ public sealed class PatchDongleSource : IEegSource, IRawPacketSource
         _serial = dongle.Serial;
         _handle = Open(_serial, _settings.DongleBaud);
 
-        Info = DeviceInfo.LucidPro($"dongle {dongle.Serial}", "-", CgxStreamParser.AccelRate);
+        Info = DeviceInfo.LucidPro($"dongle {dongle.Serial}", "-", _parser.AccelRateHz);
+        Log.Info($"Accelerometer at {_parser.AccelRateHz:0.##} Hz, impedance at {CgxStreamParser.ImpedanceRate:0} Hz.");
         Status = new DeviceStatus { Connected = false, Message = dongle.Description };
         StatusChanged?.Invoke(Status);
         _stop = false;

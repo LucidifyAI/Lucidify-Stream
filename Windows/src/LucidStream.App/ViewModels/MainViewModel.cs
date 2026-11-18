@@ -60,6 +60,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private float[]? _latestBands;
     private const int TraceSamples = 5000; // 10 s at 500 Hz, for the Cloud window's local trace
 
+    // Accelerometer for the orientation view, low-passed so head movement does not shake it.
+    private const double AccelSmoothingSeconds = 0.5;
+    private readonly object _accGate = new();
+    private double _ax, _ay, _az;
+    private bool _hasAcc;
+    private IEegSource? _accSource;
+
     /// <summary>The live signal for the main window's waveform and spectrogram.</summary>
     public LucidStream.App.Live.LiveSignal Live { get; } = new();
 
@@ -76,7 +83,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         {
             (StreamKeys.EegRaw, "Raw EEG"), (StreamKeys.EegFiltered, "Filtered EEG"), (StreamKeys.Acc, "Accelerometer"),
             (StreamKeys.BandPower, "Band power"), (StreamKeys.Quality, "Signal quality"), (StreamKeys.Status, "Device status"),
-            (StreamKeys.Markers, "Markers")
+            (StreamKeys.Markers, "Markers"), (StreamKeys.Impedance, "Impedance")
         }.Select(s => new StreamToggle { Key = s.Item1, Label = s.Item2, Enabled = settings.LslStreams.Contains(s.Item1) }));
         foreach (var t in LslStreams) t.PropertyChanged += (_, _) => SaveStreamSelection();
 
@@ -232,6 +239,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     /// <summary>Raised on the UI thread with the last 4 s of filtered EEG (Fp1, Fp2), oldest first.</summary>
     public event Action<float[], float[]>? TraceUpdated;
 
+    /// <summary>Raised on the UI thread with the smoothed accelerometer reading (X, Y, Z in g) while a patch is connected.</summary>
+    public event Action<double, double, double>? AccelUpdated;
+
+    /// <summary>Raised on the UI thread when the patch disconnects, so the orientation view can clear.</summary>
+    public event Action? AccelCleared;
+
     /// <summary>The window opens URLs (default browser) when asked.</summary>
     public event Action<string>? OpenUrlRequested;
 
@@ -332,6 +345,37 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Accelerometer straight from the source (acquisition thread), so the orientation view works as soon as the patch
+    /// connects, before streaming starts. Low-passed so head movement does not shake the view.
+    /// </summary>
+    private void OnSourceAccel(AccelBlock block)
+    {
+        var rate = _accSource?.Info?.AccelRate is double r && r > 0 ? r : 50;
+        var alpha = 1 - Math.Exp(-1.0 / (rate * AccelSmoothingSeconds));
+        lock (_accGate)
+        {
+            for (var i = 0; i < block.SampleCount; i++)
+            {
+                double x = block.Samples[i * 3], y = block.Samples[i * 3 + 1], z = block.Samples[i * 3 + 2];
+                if (double.IsNaN(x) || double.IsNaN(y) || double.IsNaN(z)) continue;
+                if (!_hasAcc) { _ax = x; _ay = y; _az = z; _hasAcc = true; }
+                else { _ax += (x - _ax) * alpha; _ay += (y - _ay) * alpha; _az += (z - _az) * alpha; }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The orientation view's "Set upright" was pressed: log the reference, and while streaming add it as a marker so
+    /// anyone analyzing the accelerometer stream can apply the same reference.
+    /// </summary>
+    public void NoteOrientationReference(double x, double y, double z)
+    {
+        Log.Info(FormattableString.Invariant($"Orientation reference set (upright): gravity X {x:0.000}, Y {y:0.000}, Z {z:0.000} g in patch axes."));
+        if (IsStreaming)
+            _engine.AddMarker(FormattableString.Invariant($"{{\"event\":\"orientation_upright\",\"gravity_g\":[{x:0.0000},{y:0.0000},{z:0.0000}]}}"));
+    }
+
     /// <summary>Lucidify Cloud: sign-in, patient, recording and delay.</summary>
     public CloudViewModel Cloud { get; }
 
@@ -355,6 +399,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public void Tick()
     {
         Cloud.Tick();
+
+        bool hasAcc;
+        double ax, ay, az;
+        lock (_accGate) { hasAcc = _hasAcc; ax = _ax; ay = _ay; az = _az; }
+        if (hasAcc) AccelUpdated?.Invoke(ax, ay, az);
+
         if (!IsStreaming) return;
         float[] a = new float[TraceSamples], b = new float[TraceSamples];
         lock (_traceGate)
@@ -412,6 +462,16 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             DeviceName = $"{info.Model} {info.Serial}";
             Firmware = info.Firmware;
             ApplyStatus(_engine.DeviceStatus);
+        }
+        // Follow the connected source's accelerometer for the orientation view.
+        var accSource = _engine.State == EngineState.Disconnected ? null : _engine.Source;
+        if (!ReferenceEquals(accSource, _accSource))
+        {
+            if (_accSource != null) _accSource.AccelReceived -= OnSourceAccel;
+            _accSource = accSource;
+            lock (_accGate) _hasAcc = false;
+            if (accSource != null) accSource.AccelReceived += OnSourceAccel;
+            else AccelCleared?.Invoke();
         }
         if (IsStreaming && !_wasStreaming) ResetLiveView();
         _wasStreaming = IsStreaming;

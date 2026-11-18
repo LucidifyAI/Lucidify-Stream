@@ -293,8 +293,7 @@
                             <DockPanel>
                                 <TextBlock DockPanel.Dock="Top" Text="Band power" Foreground="{StaticResource TextBrush}" FontFamily="{StaticResource DisplayFont}"
                                            FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
-                                <TextBlock DockPanel.Dock="Bottom" Text="Relative power, both channels." Style="{StaticResource Hint}" Margin="0,6,0,0"/>
-                    <ItemsControl ItemsSource="{Binding Bands}">
+                    <ItemsControl ItemsSource="{Binding Bands}" DockPanel.Dock="Top">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Grid Margin="0,4">
@@ -310,6 +309,18 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                                <TextBlock DockPanel.Dock="Top" Text="Relative power, both channels." Style="{StaticResource Hint}" Margin="0,6,0,0"/>
+                                <!-- orientation from the accelerometer: fills what the band bars leave -->
+                                <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Margin="2,6,0,0">
+                                    <Button Content="Set upright" Style="{StaticResource Link}" FontSize="11" Click="SetUpright_Click"
+                                            ToolTip="Sit up straight and hold still for a second, then press. This pose then reads 0 degrees, with Y straight up and Z pointing at you."/>
+                                    <Button Content="Reset" Style="{StaticResource Link}" FontSize="11" Margin="14,0,0,0" Click="ResetUpright_Click"
+                                            ToolTip="Back to the default upright, worked out from how the patch sits on the forehead."/>
+                                </StackPanel>
+                                <Border CornerRadius="8" ClipToBounds="True" Background="Black" Margin="0,12,0,0" MinHeight="100"
+                                        ToolTip="Head tilt from the patch accelerometer (gravity), smoothed over about 0.5 s, shown like a mirror. Upright: Y (green) up, X (red) horizontal, Z (blue) pointing at you. Turning left or right cannot be measured: the patch has no gyroscope or compass.">
+                                    <live:OrientationView x:Name="Gimbal"/>
+                                </Border>
                             </DockPanel>
                         </ContentControl>
                     </Grid>

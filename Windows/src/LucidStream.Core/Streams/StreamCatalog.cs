@@ -29,6 +29,7 @@ public static class StreamKeys
     public const string Quality = "quality";
     public const string Status = "status";
     public const string Markers = "markers";
+    public const string Impedance = "impedance";
 
     /// <summary>Reserved for licensed Lucidify outputs; never served in v1.</summary>
     public static readonly string[] Reserved = { "lucidify.lsi", "lucidify.sleepstage", "lucidify.delirium" };
@@ -69,7 +70,15 @@ public sealed class StreamCatalog
             new(4, StreamKeys.Quality, "Quality", "Lucidify.Quality", 1, quality, "kOhm (impedance), 0-1 (quality)", false, StreamScope.Processed),
             new(5, StreamKeys.Status, "Status", "Lucidify.Status", 0, new[] { "status" }, "json", true, StreamScope.Processed),
             new(6, StreamKeys.Markers, "Markers", "Markers", 0, new[] { "marker" }, "label", true, StreamScope.Processed),
+            new(7, StreamKeys.Impedance, "Impedance", "Impedance", device.ImpedanceRate, ImpedanceChannels(eeg), "kOhm (impedance), mV (DC offset)", false, StreamScope.Raw),
         };
+    }
+
+    /// <summary>Channels of the impedance stream: the impedance of each EEG channel, then the DC offset of each.</summary>
+    public static string[] ImpedanceChannels(IEnumerable<string> eegLabels)
+    {
+        var labels = eegLabels.ToArray();
+        return labels.Select(c => $"{c}_impedance").Concat(labels.Select(c => $"{c}_dc_offset")).ToArray();
     }
 
     public StreamDef? Find(string key) => Streams.FirstOrDefault(s => s.Key == key);

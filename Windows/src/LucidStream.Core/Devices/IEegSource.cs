@@ -39,6 +39,12 @@ public interface IRawPacketSource
     event Action<CgxRawBlock>? RawReceived;
 }
 
+/// <summary>A source that also delivers impedance and DC offset per channel (the patch, the simulator, and replays of recordings that have them).</summary>
+public interface IImpedanceSource
+{
+    event Action<ImpedanceBlock>? ImpedanceReceived;
+}
+
 /// <summary>
 /// A parser that handles one notification at a time. Not used by the patch sources: CGX packets can split across
 /// notifications, so they use the stateful <see cref="CgxStreamParser"/> instead.

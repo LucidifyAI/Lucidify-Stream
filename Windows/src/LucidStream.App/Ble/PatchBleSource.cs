@@ -18,7 +18,7 @@ namespace LucidStream.App.Ble;
 /// all notified bytes as one stream. The patch needs no start command. Parsing is in Core (CgxStreamParser).
 /// If the data stops (out of range, patch off) it reconnects by itself until the patch is back.
 /// </summary>
-public sealed class PatchBleSource : IEegSource, IRawPacketSource
+public sealed class PatchBleSource : IEegSource, IRawPacketSource, IImpedanceSource
 {
     private readonly PatchBleSettings _settings;
     private readonly CgxStreamParser _parser;
@@ -39,12 +39,15 @@ public sealed class PatchBleSource : IEegSource, IRawPacketSource
     private CancellationTokenSource? _life;
     private Task? _supervisor;
 
+    public event Action<ImpedanceBlock>? ImpedanceReceived;
+
     public PatchBleSource(PatchBleSettings settings)
     {
         _settings = settings;
-        _parser = new CgxStreamParser(settings.PackingMode);
+        _parser = new CgxStreamParser(settings.PackingMode, settings.AccelDecimation);
         _parser.Eeg += b => EegReceived?.Invoke(b);
         _parser.Accel += b => AccelReceived?.Invoke(b);
+        _parser.Impedance += b => ImpedanceReceived?.Invoke(b);
         _parser.Raw += b => RawReceived?.Invoke(b);
         _parser.Status += s =>
         {
@@ -77,7 +80,8 @@ public sealed class PatchBleSource : IEegSource, IRawPacketSource
         await ConnectAsync(ct);
 
         var serial = name.Length > 0 ? name : address.ToString("X12", CultureInfo.InvariantCulture);
-        Info = DeviceInfo.LucidPro(serial, "-", CgxStreamParser.AccelRate);
+        Info = DeviceInfo.LucidPro(serial, "-", _parser.AccelRateHz);
+        Log.Info($"Accelerometer at {_parser.AccelRateHz:0.##} Hz, impedance at {CgxStreamParser.ImpedanceRate:0} Hz.");
         _connectedAt = Clock.Now;
         SetConnected(true, name);
         Log.Info($"{name} connected{(_session != null ? $" (max packet {_session.MaxPduSize} bytes)" : "")}; waiting for data.");

@@ -81,6 +81,7 @@ public sealed class LucidStreamEngine : IAsyncDisposable, IStreamSink
             source.AccelReceived += OnSourceAccel;
             source.MarkerReceived += OnSourceMarker;
             if (source is IRawPacketSource raw) raw.RawReceived += OnSourceRaw;
+            if (source is IImpedanceSource imp) imp.ImpedanceReceived += OnSourceImpedance;
             try
             {
                 await source.StartAsync(ct);
@@ -125,12 +126,14 @@ public sealed class LucidStreamEngine : IAsyncDisposable, IStreamSink
         s.AccelReceived -= OnSourceAccel;
         s.MarkerReceived -= OnSourceMarker;
         if (s is IRawPacketSource raw) raw.RawReceived -= OnSourceRaw;
+        if (s is IImpedanceSource imp) imp.ImpedanceReceived -= OnSourceImpedance;
     }
 
     private void OnSourceRaw(CgxRawBlock b) => RawPacketsReceived?.Invoke(b);
 
     private void OnSourceEeg(EegBlock b) => _core?.OnEeg(b);
     private void OnSourceAccel(AccelBlock b) => _core?.OnAccel(b);
+    private void OnSourceImpedance(ImpedanceBlock b) => _core?.OnImpedance(b);
     private void OnSourceMarker(SourceMarker m) => _core?.AddMarker(m.Label);
 
     private void OnSourceStatus(DeviceStatus s)

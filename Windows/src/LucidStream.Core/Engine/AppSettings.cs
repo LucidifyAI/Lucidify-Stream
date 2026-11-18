@@ -50,8 +50,15 @@ public sealed class AppSettings
     public List<string> LslStreams { get; set; } = new()
     {
         StreamKeys.EegRaw, StreamKeys.EegFiltered, StreamKeys.Acc, StreamKeys.BandPower,
-        StreamKeys.Quality, StreamKeys.Status, StreamKeys.Markers
+        StreamKeys.Quality, StreamKeys.Status, StreamKeys.Markers, StreamKeys.Impedance
     };
+
+    /// <summary>
+    /// Which streams existed when <see cref="LslStreams"/> was last saved. Settings saved before a stream existed get
+    /// that stream switched on once; after that the user's choice stands.
+    /// </summary>
+    public int LslStreamsVersion { get; set; }
+    public const int CurrentLslStreamsVersion = 2;
 
     /// <summary>Mains frequency for the notch: 60 (Americas) or 50.</summary>
     public double LineFrequencyHz { get; set; } = 60;
@@ -99,7 +106,11 @@ public sealed class AppSettings
         try
         {
             if (File.Exists(path))
-                return JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), SessionJson.Options) ?? new AppSettings();
+            {
+                var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(path), SessionJson.Options) ?? new AppSettings();
+                s.UpgradeStreams();
+                return s;
+            }
         }
         catch (Exception ex)
         {
@@ -108,12 +119,20 @@ public sealed class AppSettings
         return new AppSettings();
     }
 
+    /// <summary>Version 2 added the impedance stream.</summary>
+    private void UpgradeStreams()
+    {
+        if (LslStreamsVersion < 2 && !LslStreams.Contains(StreamKeys.Impedance)) LslStreams.Add(StreamKeys.Impedance);
+        LslStreamsVersion = CurrentLslStreamsVersion;
+    }
+
     public void Save(string? path = null)
     {
         path ??= DefaultPath;
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            LslStreamsVersion = CurrentLslStreamsVersion;
             File.WriteAllText(path, JsonSerializer.Serialize(this, SessionJson.Options));
         }
         catch (Exception ex)

@@ -108,6 +108,17 @@ t.Section("CGX Patch packets");
     t.Check("raw packets kept unchanged", raw.Sum(r => r.Count) == 20 && raw[0].Packets.AsSpan(0, 36).SequenceEqual(Packet(0, 10, -10)));
     t.Check("accelerometer averaged to 50 Hz", acc.Sum(a => a.SampleCount) == 2 && Math.Abs(acc[0].Samples[2] - 1) < 0.01);
 
+    var full = new CgxStreamParser(CgxPacking.Cgx7Bit, new PatchBleSettings().AccelDecimation);
+    var fullAcc = new List<AccelBlock>();
+    var fullEeg = new List<EegBlock>();
+    full.Accel += fullAcc.Add;
+    full.Eeg += fullEeg.Add;
+    full.Feed(bytes, 200.0);
+    t.Check($"accelerometer at 500 Hz by default: {fullAcc.Sum(a => a.SampleCount)} samples for {fullEeg.Sum(b => b.SampleCount)} EEG samples",
+        full.AccelRateHz == 500 && fullAcc.Sum(a => a.SampleCount) == 20 && Math.Abs(fullAcc[0].Samples[2] - 1) < 0.01);
+    t.Check("full-rate accelerometer stamped like the EEG", Math.Abs(fullAcc[^1].ReceivedAt - fullEeg[^1].ReceivedAt) < 1e-9);
+    t.Check("accel_rate_hz 50 averages 10 samples", new PatchBleSettings { AccelRateHz = 50 }.AccelDecimation == 10);
+
     // Drop counters 20-24: five lost packets, then a broken packet that contains 0xFF.
     var broken = Packet(25, 0, 0);
     broken[10] = 0xFF;
@@ -134,6 +145,17 @@ t.Section("CGX Patch packets");
     t.Check($"status battery {s0.BatteryPercent}% ({s0.BatteryVolts} V), SD {s0.SdCardPresent}", s0.BatteryPercent == 58 && s0.SdCardPresent == false);
     t.Check($"status impedance {s0.ImpedanceKohm[0]} kOhm", Math.Abs(s0.ImpedanceKohm[0]!.Value - 15) < 0.3);
     t.Check($"contact from DC offset: AFz {s0.DcOffsetMv[0]} mV ok, Fp2 {s0.DcOffsetMv[1]} mV flagged", s0.Contact[0] && !s0.Contact[1]);
+
+    // Impedance stream: the same second of packets, averaged over 50 packets (10 Hz).
+    var p3 = new CgxStreamParser();
+    var imps = new List<ImpedanceBlock>();
+    p3.Impedance += imps.Add;
+    p3.Feed(sec.ToArray(), 10);
+    var impRows = imps.Sum(b => b.SampleCount);
+    var z = imps.Count > 0 ? imps[0].Samples : Array.Empty<float>();
+    t.Check($"impedance stream: {impRows} rows for one second, 4 values per row", impRows == 10 && imps.All(b => b.Channels == 4));
+    t.Check($"impedance row: {z.ElementAtOrDefault(0):0.0} / {z.ElementAtOrDefault(1):0.0} kOhm, DC offset {z.ElementAtOrDefault(2):0.0} / {z.ElementAtOrDefault(3):0.0} mV",
+        z.Length >= 4 && Math.Abs(z[0] - 15) < 0.3 && Math.Abs(z[1] - 15) < 0.3 && Math.Abs(z[2] - 50) < 0.5 && Math.Abs(z[3] - 332.5) < 0.5);
 }
 
 static bool IsContiguous(List<EegBlock> blocks)
@@ -336,6 +358,12 @@ t.Section("Stream core: chunking, timestamps, gaps");
     t.Check("long gap reported unfilled", gaps.Count == 2 && !gaps[1].Filled && gaps[1].Count == 1000);
     t.Check("index jumps by 1000 after long gap", raw.Last().EndIndexExclusive == 200 + 1000 + 20 && raw.Last().Index == 1200);
     t.Check("dropped sample count", core.DroppedSamples == 1040);
+
+    core.OnImpedance(new ImpedanceBlock(new float[] { 10, 11, 5, -5, 10, 11, 5, -5 }, 4, now));
+    var impFrames = sink.Frames.Where(f => f.Def.Key == StreamKeys.Impedance).ToList();
+    t.Check("impedance frame: 2 rows x 4 channels, newest at arrival - latency, 0.1 s apart",
+        impFrames.Count == 1 && impFrames[0].SampleCount == 2 && impFrames[0].Def.ChannelCount == 4
+        && Math.Abs(impFrames[0].Timestamps[1] - (now - 0.04)) < 1e-9 && Math.Abs(impFrames[0].Timestamps[1] - impFrames[0].Timestamps[0] - 0.1) < 1e-9);
 }
 
 t.Section("WebSocket server end to end");
@@ -392,7 +420,7 @@ t.Section("WebSocket server end to end");
     var token = welcome.GetProperty("token").GetString()!;
     t.Check("client listed as a browser app", engine.Clients().Any(c => c.Kind == "Browser" && c.Origin == appOrigin));
     t.Check("welcome scopes read:processed + read:raw", welcome.GetProperty("scopes").EnumerateArray().Select(e => e.GetString()).OrderBy(s => s).SequenceEqual(new[] { "read:processed", "read:raw" }));
-    t.Check("welcome mode live, 7 streams", welcome.GetProperty("mode").GetString() == "live" && welcome.GetProperty("streams").GetArrayLength() == 7);
+    t.Check("welcome mode live, 8 streams", welcome.GetProperty("mode").GetString() == "live" && welcome.GetProperty("streams").GetArrayLength() == 8);
 
     await SendText(app1, "{\"type\":\"subscribe\",\"streams\":[\"eeg.raw\"],\"encoding\":\"binary\"}");
     await SendText(app1, "{\"type\":\"subscribe\",\"streams\":[\"bandpower\"],\"encoding\":\"json\"}");
@@ -503,6 +531,8 @@ t.Section("Recording and replay parity");
     t.Check($"recorded samples == streamed samples ({recorded.Length / 2})", recorded.Length == live.Count);
     t.Check("recorded values identical to eeg.raw (NaN-aware)", recorded.Zip(live).All(p => p.First.Equals(p.Second)));
     t.Check("marker recorded", reader.Markers().Any(m => m.Text == "eyes closed"));
+    var recordedImp = reader.Impedance().ToList();
+    t.Check($"impedance recorded ({recordedImp.Count} rows, 4 values each)", recordedImp.Count >= 15 && recordedImp.All(r => r.Values.Length == 4));
 
     var replayed = new List<float>();
     var replayFlag = false;

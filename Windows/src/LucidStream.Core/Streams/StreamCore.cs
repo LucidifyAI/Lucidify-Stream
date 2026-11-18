@@ -51,6 +51,8 @@ public sealed class StreamCore
 
     private long? _expectedCounter;
     private double _lastEegTs = double.NegativeInfinity;
+    private double _lastAccTs = double.NegativeInfinity;
+    private double _lastImpTs = double.NegativeInfinity;
 
     public StreamCatalog Catalog { get; }
     public long DroppedSamples { get; private set; }
@@ -200,13 +202,34 @@ public sealed class StreamCore
         if (block.SampleCount == 0) return;
         lock (_gate)
         {
-            var n = block.SampleCount;
             var rate = _device.AccelRate > 0 ? _device.AccelRate : 25;
-            var tLast = block.ReceivedAt - _latency;
-            var ts = new double[n];
-            for (var i = 0; i < n; i++) ts[i] = tLast - (n - 1 - i) / rate;
-            EmitNumeric(StreamKeys.Acc, block.Samples, ts, false);
+            EmitNumeric(StreamKeys.Acc, block.Samples, Stamp(block.SampleCount, block.ReceivedAt, rate, ref _lastAccTs), false);
         }
+    }
+
+    /// <summary>Impedance (kOhm) and DC offset (mV) per channel, timestamped the same way as the accelerometer.</summary>
+    public void OnImpedance(ImpedanceBlock block)
+    {
+        if (block.SampleCount == 0 || block.Channels != Catalog[StreamKeys.Impedance].ChannelCount) return;
+        lock (_gate)
+        {
+            var rate = _device.ImpedanceRate > 0 ? _device.ImpedanceRate : 10;
+            EmitNumeric(StreamKeys.Impedance, block.Samples, Stamp(block.SampleCount, block.ReceivedAt, rate, ref _lastImpTs), false);
+        }
+    }
+
+    /// <summary>Newest sample at arrival minus BLE latency, earlier ones back at the nominal rate, kept strictly increasing.</summary>
+    private double[] Stamp(int n, double receivedAt, double rate, ref double last)
+    {
+        var tLast = receivedAt - _latency;
+        var ts = new double[n];
+        for (var i = 0; i < n; i++)
+        {
+            ts[i] = tLast - (n - 1 - i) / rate;
+            if (ts[i] <= last) ts[i] = last + 1e-6;
+            last = ts[i];
+        }
+        return ts;
     }
 
     /// <summary>Emit a marker now (or at a given LSL time). Returns its timestamp.</summary>

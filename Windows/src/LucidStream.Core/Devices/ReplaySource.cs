@@ -9,13 +9,15 @@ namespace LucidStream.Core.Devices;
 /// Packets are 10 samples, as from the patch; the recorded sample index is used as the device counter, so recorded
 /// gaps reproduce. Recorded markers are re-emitted at their original offsets.
 /// </summary>
-public sealed class ReplaySource : IEegSource
+public sealed class ReplaySource : IEegSource, IImpedanceSource
 {
     private const int SamplesPerPacket = 10;
     private readonly SessionReader _reader;
     private readonly bool _loop;
     private CancellationTokenSource? _cts;
     private Thread? _thread;
+
+    public event Action<ImpedanceBlock>? ImpedanceReceived;
 
     public ReplaySource(string sessionFolder, bool loop)
     {
@@ -39,7 +41,10 @@ public sealed class ReplaySource : IEegSource
     public Task StartAsync(CancellationToken ct)
     {
         var h = _reader.Header;
-        Info = new DeviceInfo(h.Model, h.Serial, h.Firmware, h.EegRate, h.AccelRate, h.EegLabels, h.Reference);
+        Info = new DeviceInfo(h.Model, h.Serial, h.Firmware, h.EegRate, h.AccelRate, h.EegLabels, h.Reference)
+        {
+            ImpedanceRate = h.ImpedanceRate > 0 ? h.ImpedanceRate : CgxStreamParser.ImpedanceRate
+        };
         Status = new DeviceStatus { Connected = true, Contact = h.EegLabels.Select(_ => true).ToArray(), ImpedanceKohm = h.EegLabels.Select(_ => (double?)null).ToArray(), Message = "Replay" };
         StatusChanged?.Invoke(Status);
         _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -69,9 +74,11 @@ public sealed class ReplaySource : IEegSource
         {
             var eeg = _reader.Eeg().GetEnumerator();
             var acc = _reader.Acc().GetEnumerator();
+            var imp = _reader.Impedance().GetEnumerator();
             var markers = _reader.Markers();
             var markerPos = 0;
             var hasAcc = acc.MoveNext();
+            var hasImp = imp.MoveNext();
             double? firstT = null;
             long lastIndex = -1;
             var sw = Stopwatch.StartNew();
@@ -106,6 +113,18 @@ public sealed class ReplaySource : IEegSource
                         hasAcc = acc.MoveNext();
                     }
                     if (accRows.Count > 0) AccelReceived?.Invoke(new AccelBlock(accRows.ToArray(), Clock.Now));
+                }
+
+                if (hasImp)
+                {
+                    var impRows = new List<float>();
+                    var impChannels = imp.Current.Values.Length;
+                    while (hasImp && imp.Current.T - firstT.Value <= offset)
+                    {
+                        impRows.AddRange(imp.Current.Values);
+                        hasImp = imp.MoveNext();
+                    }
+                    if (impRows.Count > 0) ImpedanceReceived?.Invoke(new ImpedanceBlock(impRows.ToArray(), impChannels, Clock.Now));
                 }
 
                 while (markerPos < markers.Count && markers[markerPos].T - firstT.Value <= offset)

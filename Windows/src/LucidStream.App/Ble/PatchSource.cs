@@ -10,7 +10,7 @@ namespace LucidStream.App.Ble;
 /// "LucidPro patch" in the app: the CGX USB dongle when one is plugged in (CGX's recommended link on a PC),
 /// otherwise Windows Bluetooth. settings.json "ble": { "connection": "auto" | "dongle" | "bluetooth" } overrides.
 /// </summary>
-public sealed class PatchSource : IEegSource, IRawPacketSource
+public sealed class PatchSource : IEegSource, IRawPacketSource, IImpedanceSource
 {
     private readonly PatchBleSettings _settings;
     private IEegSource? _inner;
@@ -30,6 +30,9 @@ public sealed class PatchSource : IEegSource, IRawPacketSource
 
     /// <summary>Raw 36-byte packets, unchanged, for Lucidify Cloud upload.</summary>
     public event Action<CgxRawBlock>? RawReceived;
+
+    /// <summary>Impedance (kOhm) and DC offset (mV) per channel, 10 Hz.</summary>
+    public event Action<ImpedanceBlock>? ImpedanceReceived;
 
     public async Task StartAsync(CancellationToken ct)
     {
@@ -57,6 +60,7 @@ public sealed class PatchSource : IEegSource, IRawPacketSource
         _inner.EegReceived += e => EegReceived?.Invoke(e);
         _inner.AccelReceived += a => AccelReceived?.Invoke(a);
         _inner.StatusChanged += s => StatusChanged?.Invoke(s);
+        if (_inner is IImpedanceSource imp) imp.ImpedanceReceived += z => ImpedanceReceived?.Invoke(z);
         try { await _inner.StartAsync(ct); }
         catch
         {

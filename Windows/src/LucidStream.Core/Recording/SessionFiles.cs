@@ -17,6 +17,9 @@ public sealed class SessionHeader
     public string Firmware { get; set; } = "";
     public double EegRate { get; set; }
     public double AccelRate { get; set; }
+
+    /// <summary>Rate of impedance.csv. 0 in sessions recorded before the impedance stream existed.</summary>
+    public double ImpedanceRate { get; set; }
     public string[] EegLabels { get; set; } = Array.Empty<string>();
     public string Reference { get; set; } = "";
     public string EegUnit { get; set; } = "microvolts";
@@ -29,7 +32,8 @@ public sealed class SessionHeader
 
 /// <summary>
 /// The optional local session file (spec: "Local session file"). A folder with session.json plus CSV files:
-/// eeg_raw.csv (index, t, AFz, Fp2), acc.csv (index, t, x, y, z), markers.csv (index, t, text), gaps.csv.
+/// eeg_raw.csv (index, t, AFz, Fp2), acc.csv (index, t, x, y, z), impedance.csv (index, t, impedance kOhm and DC offset mV
+/// per channel), markers.csv (index, t, text), gaps.csv.
 /// Values are written with round-trip precision so a replay reproduces eeg.raw exactly.
 ///
 /// TODO(format): switch to the Lucidify session format used by the Android/Windows apps once it is shared,
@@ -39,7 +43,7 @@ public sealed class SessionWriter : IStreamSink, IDisposable
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
     private readonly object _gate = new();
-    private readonly StreamWriter _eeg, _acc, _markers, _gaps;
+    private readonly StreamWriter _eeg, _acc, _imp, _markers, _gaps;
     private bool _disposed;
     private DateTime _lastFlush = DateTime.UtcNow;
 
@@ -53,12 +57,13 @@ public sealed class SessionWriter : IStreamSink, IDisposable
         var header = new SessionHeader
         {
             Model = device.Model, Serial = device.Serial, Firmware = device.Firmware, EegRate = device.EegRate,
-            AccelRate = device.AccelRate, EegLabels = device.EegLabels, Reference = device.Reference,
+            AccelRate = device.AccelRate, ImpedanceRate = device.ImpedanceRate, EegLabels = device.EegLabels, Reference = device.Reference,
             StartUtc = DateTimeOffset.UtcNow, StartLslTime = Clock.Now, App = appName, Replay = replay
         };
         File.WriteAllText(Path.Combine(Folder, "session.json"), JsonSerializer.Serialize(header, SessionJson.Options));
         _eeg = Open("eeg_raw.csv", "index,t," + string.Join(",", device.EegLabels));
         _acc = Open("acc.csv", "index,t,x,y,z");
+        _imp = Open("impedance.csv", "index,t," + string.Join(",", StreamCatalog.ImpedanceChannels(device.EegLabels)));
         _markers = Open("markers.csv", "index,t,text");
         _gaps = Open("gaps.csv", "stream,from_index,count,reason,filled");
         Log.Info($"Recording to {Folder}");
@@ -80,6 +85,7 @@ public sealed class SessionWriter : IStreamSink, IDisposable
             {
                 case StreamKeys.EegRaw: WriteNumeric(_eeg, f); break;
                 case StreamKeys.Acc: WriteNumeric(_acc, f); break;
+                case StreamKeys.Impedance: WriteNumeric(_imp, f); break;
                 case StreamKeys.Markers:
                     _markers.WriteLine($"{f.Index},{f.T0.ToString("R", Inv)},{Csv(f.Text ?? "")}");
                     _markers.Flush();
@@ -87,7 +93,7 @@ public sealed class SessionWriter : IStreamSink, IDisposable
             }
             if ((DateTime.UtcNow - _lastFlush).TotalSeconds > 2)
             {
-                _eeg.Flush(); _acc.Flush();
+                _eeg.Flush(); _acc.Flush(); _imp.Flush();
                 _lastFlush = DateTime.UtcNow;
             }
         }
@@ -124,7 +130,7 @@ public sealed class SessionWriter : IStreamSink, IDisposable
         {
             if (_disposed) return;
             _disposed = true;
-            _eeg.Dispose(); _acc.Dispose(); _markers.Dispose(); _gaps.Dispose();
+            _eeg.Dispose(); _acc.Dispose(); _imp.Dispose(); _markers.Dispose(); _gaps.Dispose();
         }
         Log.Info("Recording closed.");
     }
@@ -162,6 +168,9 @@ public sealed class SessionReader
 
     public IEnumerable<Row> Eeg() => Numeric("eeg_raw.csv");
     public IEnumerable<Row> Acc() => Numeric("acc.csv");
+
+    /// <summary>Impedance rows; empty for sessions recorded before the impedance stream existed.</summary>
+    public IEnumerable<Row> Impedance() => Numeric("impedance.csv");
 
     public List<MarkerRow> Markers()
     {
